@@ -8,13 +8,13 @@ pub fn is_sorted(items: &[impl Ord]) -> bool {
 }
 
 pub trait Sort {
-    fn sort<T: Ord>(self, items: &mut [T]);
+    fn sort<T: Ord>(&self, items: &mut [T]);
 }
 
 pub struct Stdlib;
 
 impl Sort for Stdlib {
-    fn sort<T: Ord>(self, items: &mut [T]) {
+    fn sort<T: Ord>(&self, items: &mut [T]) {
         items.sort();
     }
 }
@@ -22,7 +22,7 @@ impl Sort for Stdlib {
 pub struct Insertion;
 
 impl Sort for Insertion {
-    fn sort<T: Ord>(self, items: &mut [T]) {
+    fn sort<T: Ord>(&self, items: &mut [T]) {
         for i in 1..items.len() {
             let j = items[..i]
                 .iter()
@@ -43,7 +43,7 @@ impl Sort for Insertion {
 pub struct Selection;
 
 impl Sort for Selection {
-    fn sort<T: Ord>(self, items: &mut [T]) {
+    fn sort<T: Ord>(&self, items: &mut [T]) {
         for i in 0..items.len() - 1 {
             let min = items[i..].iter().min().unwrap();
             let j = unsafe { (min as *const T).offset_from(&items[0]) } as _;
