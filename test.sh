@@ -1,0 +1,1 @@
+cargo t "${1:+"-r"}" -- --show-output --test-threads 1
