@@ -1,3 +1,8 @@
+use std::{
+    cmp::Ordering,
+    ops::{Deref, DerefMut},
+};
+
 pub fn is_sorted(items: &[impl Ord]) -> bool {
     !items.windows(2).any(|window| window[0] > window[1])
 }
@@ -18,15 +23,71 @@ pub struct Insertion;
 
 impl Sort for Insertion {
     fn sort<T: Ord>(self, items: &mut [T]) {
-        for j in 1..items.len() {
-            for i in (1..=j).rev() {
-                if items[i - 1] > items[i] {
-                    items.swap(i - 1, i);
+        for i in 1..items.len() {
+            let j = items[..i]
+                .iter()
+                .rev()
+                .position(|item| item < &items[i])
+                .map_or(0, |k| i - k);
+            if j != i {
+                unsafe {
+                    let tmp = (&raw const items[i]).read();
+                    (&raw const items[j]).copy_to(&raw mut items[j + 1], i - j);
+                    (&raw mut items[j]).write(tmp);
                 }
             }
         }
     }
 }
+
+pub struct Selection;
+
+impl Sort for Selection {
+    fn sort<T: Ord>(self, items: &mut [T]) {
+        for i in 0..items.len() - 1 {
+            let min = items[i..].iter().min().unwrap();
+            let j = unsafe { (min as *const T).offset_from(&items[0]) } as _;
+            items.swap(i, j);
+        }
+    }
+}
+
+macro_rules! ordfloat {
+    ($ord:ident($float:ty)) => {
+        #[derive(PartialOrd, Copy, Clone, Default, Debug)]
+        pub struct $ord(pub $float);
+
+        impl Deref for $ord {
+            type Target = $float;
+
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
+        impl DerefMut for $ord {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.0
+            }
+        }
+
+        impl PartialEq for $ord {
+            fn eq(&self, other: &Self) -> bool {
+                self.0.to_bits() == other.0.to_bits()
+            }
+        }
+
+        impl Eq for $ord {}
+
+        impl Ord for $ord {
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.total_cmp(other)
+            }
+        }
+    };
+}
+ordfloat!(OrdF32(f32));
+ordfloat!(OrdF64(f64));
 
 #[cfg(test)]
 mod tests {
@@ -107,5 +168,33 @@ mod tests {
         test(Insertion, ten_of(Custom::random));
         test(Insertion, hundred_of(Custom::random));
         test(Insertion, thousand_of(Custom::random));
+    }
+
+    #[test]
+    fn selection_sort_int() {
+        test(Selection, ten_of(int));
+        test(Selection, hundred_of(int));
+        test(Selection, thousand_of(int));
+    }
+
+    #[test]
+    fn selection_sort_string() {
+        test(Selection, ten_of(string));
+        test(Selection, hundred_of(string));
+        test(Selection, thousand_of(string));
+    }
+
+    #[test]
+    fn selection_sort_custom() {
+        test(Selection, ten_of(Custom::random));
+        test(Selection, hundred_of(Custom::random));
+        test(Selection, thousand_of(Custom::random));
+    }
+
+    #[test]
+    fn ord_float() {
+        test(Stdlib, hundred_of(float).map(OrdF32));
+        test(Insertion, hundred_of(float).map(OrdF32));
+        test(Selection, hundred_of(float).map(OrdF32));
     }
 }

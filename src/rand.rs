@@ -1,5 +1,5 @@
 use rand::{
-    distributions::{uniform::SampleUniform, Alphanumeric, DistString},
+    distributions::{uniform::SampleUniform, Alphanumeric, DistString, Standard},
     prelude::*,
 };
 use std::{array, cell::RefCell, ops::Range};
@@ -24,8 +24,19 @@ thread_local! {
     static RNG: RefCell<ThreadRng> = RefCell::new(thread_rng());
 }
 
-pub fn int() -> i32 {
+fn gen<T>() -> T
+where
+    Standard: Distribution<T>,
+{
     RNG.with_borrow_mut(|rng| rng.gen())
+}
+
+pub fn int() -> i32 {
+    gen()
+}
+
+pub fn float() -> f32 {
+    gen()
 }
 
 pub fn string() -> String {
