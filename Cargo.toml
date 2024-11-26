@@ -5,6 +5,11 @@ edition = "2021"
 
 [dependencies]
 rand = "0.8.5"
+gnuplot = { version = "0.0", optional = true }
 
-[dev-dependencies]
-gnuplot = "0.0"
+[features]
+default = ["gnuplot"]
+
+[[bin]]
+name = "plot"
+required-features = ["gnuplot"]

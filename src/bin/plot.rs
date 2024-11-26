@@ -1,4 +1,4 @@
-use std::{any, mem::MaybeUninit, time::Instant};
+use std::{any, array, mem::MaybeUninit, time::Instant};
 
 use algorithms::*;
 use gnuplot::{
@@ -6,7 +6,7 @@ use gnuplot::{
 };
 use sort::Sort;
 
-const N: usize = 12;
+const N: usize = 15;
 const XS: [usize; N] = const {
     let mut xs = [0; N];
     let (mut i, mut x) = (0, 1);
@@ -17,14 +17,14 @@ const XS: [usize; N] = const {
     }
     xs
 };
-const INTS_LEN: usize = XS[N - 1];
+const ITEMS_LEN: usize = XS[N - 1];
 
 fn plot(sorter: impl Sort, axes: &mut Axes2D) {
-    let mut ints = [MaybeUninit::uninit(); INTS_LEN];
+    let mut items: [_; ITEMS_LEN] = array::from_fn(|_| MaybeUninit::uninit());
     let ys = XS.map(|x| {
-        let ints = rand::fill_with(rand::int)(&mut ints[..x]);
+        let items = rand::fill_with(rand::string)(&mut items[..x]);
         let before = Instant::now();
-        sorter.sort(ints);
+        sorter.sort(items);
         before.elapsed().as_nanos() as u64
     });
     axes.lines_points(
@@ -41,9 +41,16 @@ fn plot(sorter: impl Sort, axes: &mut Axes2D) {
 fn main() {
     let mut figure = Figure::new();
     figure.set_title("Sorting Algorithms");
+
     let x_ticks = (1..)
         .map(|x| Tick::Major(2f32.powi(x), AutoOption::<f32>::Auto))
         .take(N);
+    let y_ticks = (1..)
+        .zip([
+            "10ns", "100ns", "1µs", "10µs", "100µs", "1ms", "10ms", "100ms", "1s", "10s",
+        ])
+        .map(|(y, label)| Tick::Major(10f32.powi(y), AutoOption::Fix(label)));
+
     let mut axes = figure
         .axes2d()
         .set_legend(
@@ -61,11 +68,13 @@ fn main() {
         .set_x_log(Some(2.0))
         .set_y_grid(true)
         .set_y_label("Time (ns)", &[])
+        .set_y_ticks_custom(y_ticks, &[], &[])
         .set_y_log(Some(10.0));
 
     plot(sort::Insertion, &mut axes);
     plot(sort::Selection, &mut axes);
+    plot(sort::Merge, &mut axes);
     plot(sort::Stdlib, &mut axes);
 
-    figure.show().unwrap().wait().unwrap();
+    figure.show().unwrap();
 }

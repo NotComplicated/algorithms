@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     ops::{Deref, DerefMut},
+    ptr,
 };
 
 pub fn is_sorted(items: &[impl Ord]) -> bool {
@@ -8,13 +9,13 @@ pub fn is_sorted(items: &[impl Ord]) -> bool {
 }
 
 pub trait Sort {
-    fn sort<T: Ord>(&self, items: &mut [T]);
+    fn sort(&self, items: &mut [impl Ord]);
 }
 
 pub struct Stdlib;
 
 impl Sort for Stdlib {
-    fn sort<T: Ord>(&self, items: &mut [T]) {
+    fn sort(&self, items: &mut [impl Ord]) {
         items.sort();
     }
 }
@@ -22,7 +23,7 @@ impl Sort for Stdlib {
 pub struct Insertion;
 
 impl Sort for Insertion {
-    fn sort<T: Ord>(&self, items: &mut [T]) {
+    fn sort(&self, items: &mut [impl Ord]) {
         for i in 1..items.len() {
             let j = items[..i]
                 .iter()
@@ -43,11 +44,35 @@ impl Sort for Insertion {
 pub struct Selection;
 
 impl Sort for Selection {
-    fn sort<T: Ord>(&self, items: &mut [T]) {
+    fn sort(&self, items: &mut [impl Ord]) {
         for i in 0..items.len() - 1 {
             let min = items[i..].iter().min().unwrap();
-            let j = unsafe { (min as *const T).offset_from(&items[0]) } as _;
+            let j = unsafe { ptr::from_ref(min).offset_from(&items[0]) } as _;
             items.swap(i, j);
+        }
+    }
+}
+
+pub struct Merge;
+
+impl Sort for Merge {
+    fn sort(&self, items: &mut [impl Ord]) {
+        if items.len() > 1 {
+            let mid = items.len() / 2;
+            self.sort(&mut items[..mid]);
+            self.sort(&mut items[mid..]);
+            let (mut i, mut j) = (0, mid);
+            while i < j && j < items.len() {
+                if items[i] > items[j] {
+                    unsafe {
+                        let tmp = (&raw const items[j]).read();
+                        (&raw const items[i]).copy_to(&raw mut items[i + 1], j - i);
+                        (&raw mut items[i]).write(tmp);
+                    }
+                    j += 1;
+                }
+                i += 1;
+            }
         }
     }
 }
@@ -192,10 +217,32 @@ mod tests {
     }
 
     #[test]
+    fn merge_sort_int() {
+        test(Merge, ten_of(int));
+        test(Merge, hundred_of(int));
+        test(Merge, thousand_of(int));
+    }
+
+    #[test]
+    fn merge_sort_string() {
+        test(Merge, ten_of(string));
+        test(Merge, hundred_of(string));
+        test(Merge, thousand_of(string));
+    }
+
+    #[test]
+    fn merge_sort_custom() {
+        test(Merge, ten_of(Custom::random));
+        test(Merge, hundred_of(Custom::random));
+        test(Merge, thousand_of(Custom::random));
+    }
+
+    #[test]
     fn ord_float() {
         test(Stdlib, hundred_of(float).map(OrdF32));
         test(Insertion, hundred_of(float).map(OrdF32));
         test(Selection, hundred_of(float).map(OrdF32));
+        test(Merge, hundred_of(float).map(OrdF32));
     }
 
     #[test]
@@ -204,5 +251,6 @@ mod tests {
         test(Stdlib, fifty_thousand_of(int));
         test(Insertion, fifty_thousand_of(int));
         test(Selection, fifty_thousand_of(int));
+        test(Merge, fifty_thousand_of(int));
     }
 }
