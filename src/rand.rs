@@ -16,7 +16,11 @@ pub fn hundred_of<T>(randomizer: impl FnMut() -> T) -> [T; 100] {
     array_of(randomizer)
 }
 
-pub fn thousand_of<T>(randomizer: impl FnMut() -> T) -> [T; 1000] {
+pub fn thousand_of<T>(randomizer: impl FnMut() -> T) -> [T; 1_000] {
+    array_of(randomizer)
+}
+
+pub fn fifty_thousand_of<T>(randomizer: impl FnMut() -> T) -> [T; 50_000] {
     array_of(randomizer)
 }
 

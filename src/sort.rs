@@ -122,7 +122,7 @@ mod tests {
         assert!(!is_sorted(&items));
         let before = Instant::now();
         sorter.sort(&mut items);
-        println!("Elapsed: {}µs", before.elapsed().as_micros());
+        println!("Elapsed: {:?}", before.elapsed());
 
         assert!(is_sorted(&items));
         println!();
@@ -196,5 +196,13 @@ mod tests {
         test(Stdlib, hundred_of(float).map(OrdF32));
         test(Insertion, hundred_of(float).map(OrdF32));
         test(Selection, hundred_of(float).map(OrdF32));
+    }
+
+    #[test]
+    #[ignore]
+    fn fifty_thousand() {
+        test(Stdlib, fifty_thousand_of(int));
+        test(Insertion, fifty_thousand_of(int));
+        test(Selection, fifty_thousand_of(int));
     }
 }
