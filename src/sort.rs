@@ -40,14 +40,8 @@ pub struct Insertion;
 impl Sort for Insertion {
     fn sort(&self, items: &mut [impl Ord]) {
         for i in 1..items.len() {
-            unsafe {
-                let j = items[..i]
-                    .iter()
-                    .rev()
-                    .position(|item| item < items.get_unchecked(i))
-                    .map_or(0, |k| i.unchecked_sub(k));
-                shift_back(items, i, j);
-            }
+            let (Ok(j) | Err(j)) = items[..i].binary_search(&items[i]);
+            unsafe { shift_back(items, i, j) };
         }
     }
 }
