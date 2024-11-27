@@ -6,7 +6,7 @@ use gnuplot::{
 };
 use sort::Sort;
 
-const N: usize = 15;
+const N: usize = 16;
 const XS: [usize; N] = const {
     let mut xs = [0; N];
     let (mut i, mut x) = (0, 1);
@@ -47,7 +47,7 @@ fn main() {
         .take(N);
     let y_ticks = (1..)
         .zip([
-            "10ns", "100ns", "1µs", "10µs", "100µs", "1ms", "10ms", "100ms", "1s", "10s",
+            "10ns", "100ns", "1µs", "10µs", "100µs", "1ms", "10ms", "100ms", "1s", "10s", "100s",
         ])
         .map(|(y, label)| Tick::Major(10f32.powi(y), AutoOption::Fix(label)));
 
@@ -74,6 +74,7 @@ fn main() {
     plot(sort::Insertion, &mut axes);
     plot(sort::Selection, &mut axes);
     plot(sort::Merge, &mut axes);
+    plot(sort::Quick, &mut axes);
     plot(sort::Stdlib, &mut axes);
 
     figure.show().unwrap();

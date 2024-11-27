@@ -8,6 +8,21 @@ pub fn is_sorted(items: &[impl Ord]) -> bool {
     !items.windows(2).any(|window| window[0] > window[1])
 }
 
+// SAFETY - from and to are within 0..items.len(), from >= to
+unsafe fn shift_back<T>(items: &mut [T], from: usize, to: usize) {
+    let (from, to) = (items.as_mut_ptr().add(from), items.as_mut_ptr().add(to));
+    unsafe {
+        let tmp = from.read();
+        to.copy_to(to.add(1), from.offset_from(to) as _);
+        to.write(tmp);
+    }
+}
+
+// SAFETY - i and j are within 0..items.len()
+unsafe fn swap<T>(items: &mut [T], i: usize, j: usize) {
+    unsafe { items.as_mut_ptr().add(i).swap(items.as_mut_ptr().add(j)) };
+}
+
 pub trait Sort {
     fn sort(&self, items: &mut [impl Ord]);
 }
@@ -25,17 +40,13 @@ pub struct Insertion;
 impl Sort for Insertion {
     fn sort(&self, items: &mut [impl Ord]) {
         for i in 1..items.len() {
-            let j = items[..i]
-                .iter()
-                .rev()
-                .position(|item| item < &items[i])
-                .map_or(0, |k| i - k);
-            if j != i {
-                unsafe {
-                    let tmp = (&raw const items[i]).read();
-                    (&raw const items[j]).copy_to(&raw mut items[j + 1], i - j);
-                    (&raw mut items[j]).write(tmp);
-                }
+            unsafe {
+                let j = items[..i]
+                    .iter()
+                    .rev()
+                    .position(|item| item < items.get_unchecked(i))
+                    .map_or(0, |k| i.unchecked_sub(k));
+                shift_back(items, i, j);
             }
         }
     }
@@ -45,10 +56,14 @@ pub struct Selection;
 
 impl Sort for Selection {
     fn sort(&self, items: &mut [impl Ord]) {
-        for i in 0..items.len() - 1 {
-            let min = items[i..].iter().min().unwrap();
-            let j = unsafe { ptr::from_ref(min).offset_from(&items[0]) } as _;
-            items.swap(i, j);
+        if let Some(last) = items.len().checked_sub(1) {
+            for i in 0..last {
+                unsafe {
+                    let min = items[i..].iter().min().unwrap_unchecked();
+                    let j = ptr::from_ref(min).offset_from(items.as_ptr()) as _;
+                    swap(items, i, j);
+                }
+            }
         }
     }
 }
@@ -57,22 +72,44 @@ pub struct Merge;
 
 impl Sort for Merge {
     fn sort(&self, items: &mut [impl Ord]) {
-        if items.len() > 1 {
-            let mid = items.len() / 2;
+        let len = items.len();
+        if len > 1 {
+            let mid = len / 2;
             self.sort(&mut items[..mid]);
             self.sort(&mut items[mid..]);
             let (mut i, mut j) = (0, mid);
-            while i < j && j < items.len() {
-                if items[i] > items[j] {
-                    unsafe {
-                        let tmp = (&raw const items[j]).read();
-                        (&raw const items[i]).copy_to(&raw mut items[i + 1], j - i);
-                        (&raw mut items[i]).write(tmp);
+            while i < j && j < len {
+                unsafe {
+                    if items.get_unchecked(i) > items.get_unchecked(j) {
+                        shift_back(items, j, i);
+                        j = j.unchecked_add(1);
                     }
-                    j += 1;
+                    i = i.unchecked_add(1);
                 }
-                i += 1;
             }
+        }
+    }
+}
+
+pub struct Quick;
+
+impl Sort for Quick {
+    fn sort(&self, items: &mut [impl Ord]) {
+        if items.len() > 1 {
+            let mut pivot = 0;
+            for i in 1..items.len() {
+                unsafe {
+                    if items.get_unchecked(i) < items.get_unchecked(pivot) {
+                        shift_back(items, i, pivot);
+                        pivot = pivot.unchecked_add(1);
+                    }
+                }
+            }
+            if pivot == 0 {
+                pivot = 1;
+            }
+            self.sort(&mut items[..pivot]);
+            self.sort(&mut items[pivot..]);
         }
     }
 }
@@ -238,11 +275,33 @@ mod tests {
     }
 
     #[test]
+    fn quick_sort_int() {
+        test(Quick, ten_of(int));
+        test(Quick, hundred_of(int));
+        test(Quick, thousand_of(int));
+    }
+
+    #[test]
+    fn quick_sort_string() {
+        test(Quick, ten_of(string));
+        test(Quick, hundred_of(string));
+        test(Quick, thousand_of(string));
+    }
+
+    #[test]
+    fn quick_sort_custom() {
+        test(Quick, ten_of(Custom::random));
+        test(Quick, hundred_of(Custom::random));
+        test(Quick, thousand_of(Custom::random));
+    }
+
+    #[test]
     fn ord_float() {
         test(Stdlib, hundred_of(float).map(OrdF32));
         test(Insertion, hundred_of(float).map(OrdF32));
         test(Selection, hundred_of(float).map(OrdF32));
         test(Merge, hundred_of(float).map(OrdF32));
+        test(Quick, hundred_of(float).map(OrdF32));
     }
 
     #[test]
@@ -252,5 +311,6 @@ mod tests {
         test(Insertion, fifty_thousand_of(int));
         test(Selection, fifty_thousand_of(int));
         test(Merge, fifty_thousand_of(int));
+        test(Quick, fifty_thousand_of(int));
     }
 }
