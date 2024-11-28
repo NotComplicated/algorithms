@@ -7,7 +7,7 @@ use gnuplot::{
 use sort::Sort;
 
 const N: usize = 16;
-const XS: [usize; N] = const {
+const XS: [usize; N] = {
     let mut xs = [0; N];
     let (mut i, mut x) = (0, 1);
     while i < N {
