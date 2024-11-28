@@ -82,16 +82,17 @@ pub struct OnePass;
 
 impl MaxSubarray for OnePass {
     fn max_subarray<'a, T: Elem>(&self, arr: &'a [T]) -> (&'a [T], Option<T>) {
-        let (mut val, mut min, mut min_i, mut sum, mut range) = (T::default(), None, 0, None, 0..0);
+        let (mut val, mut min, mut min_i, mut sum, mut range) =
+            (T::default(), T::default(), 0, None, 0..0);
         for (elem, i) in arr.iter().zip(1..) {
             val = val + elem;
-            let curr_sum = val.clone() - min.as_ref().unwrap_or(&T::default());
+            let curr_sum = val.clone() - &min;
             if sum.as_ref().is_none_or(|sum| sum < &curr_sum) {
                 sum = Some(curr_sum);
                 range = min_i..i;
             }
-            if min.as_ref().is_none_or(|min| min >= &val) {
-                min = Some(val.clone());
+            if min >= val {
+                min = val.clone();
                 min_i = i;
             }
         }
@@ -108,6 +109,16 @@ mod tests {
         assert_eq!((&[] as &[i32], None), max_subarray.max_subarray(&[]));
         assert_eq!((&[13] as _, Some(13)), max_subarray.max_subarray(&[13]));
         assert_eq!((&[-13] as _, Some(-13)), max_subarray.max_subarray(&[-13]));
+        assert_eq!(
+            (&[3] as _, Some(3)),
+            max_subarray.max_subarray(&[1, -4, 3, -4])
+        );
+        assert_eq!(
+            (&[18.0, 20.0, -7.0, 12.0] as _, Some(43.0)),
+            max_subarray.max_subarray(hint::black_box(&[
+                18.0, 20.0, -7.0, 12.0, -5.0, -22.0, 15.0, -4.0, 7.0,
+            ]))
+        );
         let now = Instant::now();
         assert_eq!(
             (&[18, 20, -7, 12] as _, Some(43)),
