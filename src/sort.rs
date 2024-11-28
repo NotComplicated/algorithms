@@ -145,7 +145,7 @@ macro_rules! ordfloat {
 ordfloat!(OrdF32(f32));
 ordfloat!(OrdF64(f64));
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sort"))]
 mod tests {
     use super::*;
     use crate::rand::*;
