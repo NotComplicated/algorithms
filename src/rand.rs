@@ -1,3 +1,5 @@
+use ndarray::prelude::*;
+use num_traits::Zero;
 use rand::{
     distributions::{uniform::SampleUniform, Alphanumeric, DistString, Standard},
     prelude::*,
@@ -22,6 +24,10 @@ pub fn thousand_of<T>(f: impl FnMut() -> T) -> [T; 1_000] {
 
 pub fn fifty_thousand_of<T>(f: impl FnMut() -> T) -> [T; 50_000] {
     array_of(f)
+}
+
+pub fn matrix_of<T: Clone, const M: usize, const N: usize>(mut f: impl FnMut() -> T) -> Array2<T> {
+    arr2(&array_of::<_, N>(|| array_of::<_, M>(&mut f)))
 }
 
 pub fn fill_with<T>(mut f: impl FnMut() -> T) -> impl FnMut(&mut [MaybeUninit<T>]) -> &mut [T] {
@@ -61,4 +67,8 @@ pub fn string() -> String {
 
 pub fn range<T: SampleUniform + PartialOrd>(range: Range<T>) -> T {
     RNG.with_borrow_mut(|rng| rng.gen_range(range))
+}
+
+pub fn zero<Z: Zero>() -> Z {
+    Z::zero()
 }
