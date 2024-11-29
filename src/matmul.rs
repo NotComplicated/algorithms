@@ -1,21 +1,12 @@
-use ndarray::{linalg, prelude::*, LinalgScalar, Zip};
-use std::{error::Error, fmt, mem::MaybeUninit};
+use ndarray::{iter::Indices, linalg, prelude::*, Data, LinalgScalar, ViewRepr, Zip};
+use std::{cell::UnsafeCell, error::Error, fmt, mem::MaybeUninit};
 
 pub type Mat<'a, T> = ArrayView2<'a, T>;
 pub type MatMut<'a, T> = ArrayViewMut2<'a, T>;
 
-pub trait Elem: LinalgScalar + Send + Sync {}
-
-impl<T: LinalgScalar + Send + Sync> Elem for T {}
-
-pub trait MatMul {
-    unsafe fn matmul_unchecked<T: Elem>(
-        &self,
-        lhs: Mat<T>,
-        rhs: Mat<T>,
-        out: MatMut<MaybeUninit<T>>,
-    );
-    fn matmul<'out, T: Elem>(
+pub trait MatMul<T: LinalgScalar> {
+    unsafe fn matmul_unchecked(&self, lhs: Mat<T>, rhs: Mat<T>, out: MatMut<MaybeUninit<T>>);
+    fn matmul<'out>(
         &self,
         lhs: Mat<T>,
         rhs: Mat<T>,
@@ -35,13 +26,8 @@ pub trait MatMul {
 
 pub struct NdArray;
 
-impl MatMul for NdArray {
-    unsafe fn matmul_unchecked<T: Elem>(
-        &self,
-        lhs: Mat<T>,
-        rhs: Mat<T>,
-        mut out: MatMut<MaybeUninit<T>>,
-    ) {
+impl<T: LinalgScalar> MatMul<T> for NdArray {
+    unsafe fn matmul_unchecked(&self, lhs: Mat<T>, rhs: Mat<T>, mut out: MatMut<MaybeUninit<T>>) {
         out.map_inplace(|elem| {
             elem.write(T::zero());
         });
@@ -52,71 +38,88 @@ impl MatMul for NdArray {
 
 pub struct Naive<const PAR: bool>;
 
-impl<const PAR: bool> MatMul for Naive<PAR> {
-    unsafe fn matmul_unchecked<T: Elem>(
+impl<const PAR: bool> Naive<PAR> {
+    fn zip_per_elem_impl<'a, T: LinalgScalar>(
         &self,
-        lhs: Mat<T>,
-        rhs: Mat<T>,
-        mut out: MatMut<MaybeUninit<T>>,
+        lhs: Mat<'a, T>,
+        rhs: Mat<'a, T>,
+        out: MatMut<'a, MaybeUninit<T>>,
+    ) -> (
+        Zip<(Indices<Ix2>, ArrayViewMut2<'a, MaybeUninit<T>>), Ix2>,
+        impl Fn((usize, usize), &'a mut MaybeUninit<T>) + use<'a, T, PAR>,
     ) {
-        let indices = Zip::indexed(&mut out);
-        let per_elem = |(i, j), elem: &mut MaybeUninit<T>| {
+        let indices = Zip::indexed(out);
+        let per_elem = move |(i, j), elem: &mut MaybeUninit<T>| {
             let (lhs_row, rhs_col) = (lhs.row(i), rhs.column(j));
             let zip = Zip::from(&lhs_row).and(&rhs_col);
             elem.write(zip.fold(T::zero(), |acc, &l, &r| acc + l * r));
         };
-        if PAR {
-            indices.par_for_each(per_elem);
-        } else {
-            indices.for_each(per_elem);
-        }
+        (indices, per_elem)
     }
+}
+
+impl<T: LinalgScalar> MatMul<T> for Naive<false> {
+    unsafe fn matmul_unchecked(&self, lhs: Mat<T>, rhs: Mat<T>, mut out: MatMut<MaybeUninit<T>>) {
+        let (indices, per_elem) = self.zip_per_elem_impl(lhs.view(), rhs.view(), out.view_mut());
+        indices.for_each(per_elem);
+    }
+}
+
+impl<T: LinalgScalar + Send + Sync> MatMul<T> for Naive<true> {
+    unsafe fn matmul_unchecked(&self, lhs: Mat<T>, rhs: Mat<T>, mut out: MatMut<MaybeUninit<T>>) {
+        let (indices, per_elem) = self.zip_per_elem_impl(lhs.view(), rhs.view(), out.view_mut());
+        indices.par_for_each(per_elem);
+    }
+}
+
+macro_rules! get_square_partition {
+    ($mat:ident, $mid:ident) => {{
+        let (mat1, mat2) = $mat.split_at(Axis(0), $mid);
+        let (mat11, mat12) = mat1.split_at(Axis(1), $mid);
+        let (mat21, mat22) = mat2.split_at(Axis(1), $mid);
+        [[mat11, mat12], [mat21, mat22]]
+    }};
+}
+
+fn square_partition<T>(mat: Mat<T>, mid: usize) -> [[Mat<T>; 2]; 2] {
+    get_square_partition!(mat, mid)
+}
+
+fn square_partition_mut<T>(mat: MatMut<T>, mid: usize) -> [[MatMut<T>; 2]; 2] {
+    get_square_partition!(mat, mid)
 }
 
 pub struct DivideAndConquer;
 
-impl MatMul for DivideAndConquer {
-    unsafe fn matmul_unchecked<T: Elem>(
-        &self,
-        lhs: Mat<T>,
-        rhs: Mat<T>,
-        mut out: MatMut<MaybeUninit<T>>,
-    ) {
+impl<T: LinalgScalar> MatMul<T> for DivideAndConquer {
+    unsafe fn matmul_unchecked(&self, lhs: Mat<T>, rhs: Mat<T>, mut out: MatMut<MaybeUninit<T>>) {
         match lhs.shape() {
             [1, 1] => unsafe {
                 let out_elem = out.uget_mut((0, 0)).assume_init_mut();
                 *out_elem = *out_elem + *lhs.uget((0, 0)) * *rhs.uget((0, 0));
             },
 
-            [rows, cols] if rows == cols => {
-                let mid = rows / 2;
-                let (lhs_1, lhs_2) = lhs.split_at(Axis(0), mid);
-                let (lhs_1_1, lhs_1_2) = lhs_1.split_at(Axis(1), mid);
-                let (lhs_2_1, lhs_2_2) = lhs_2.split_at(Axis(1), mid);
+            [n, _] => {
+                let mid = n / 2;
+                let lhs_parts = square_partition(lhs, mid);
+                let rhs_parts = square_partition(rhs, mid);
+                let mut out_parts = square_partition_mut(out, mid);
 
-                let (rhs_1, rhs_2) = rhs.split_at(Axis(0), mid);
-                let (rhs_1_1, rhs_1_2) = rhs_1.split_at(Axis(1), mid);
-                let (rhs_2_1, rhs_2_2) = rhs_2.split_at(Axis(1), mid);
-
-                let (out_1, out_2) = out.split_at(Axis(0), mid);
-                let (mut out_1_1, mut out_1_2) = out_1.split_at(Axis(1), mid);
-                let (mut out_2_1, mut out_2_2) = out_2.split_at(Axis(1), mid);
-
-                self.matmul_unchecked(lhs_1_1, rhs_1_1, out_1_1.view_mut());
-                self.matmul_unchecked(lhs_1_2, rhs_2_1, out_1_1.view_mut());
-                self.matmul_unchecked(lhs_1_1, rhs_1_2, out_1_2.view_mut());
-                self.matmul_unchecked(lhs_1_2, rhs_2_2, out_1_2.view_mut());
-                self.matmul_unchecked(lhs_2_1, rhs_1_1, out_2_1.view_mut());
-                self.matmul_unchecked(lhs_2_2, rhs_2_1, out_2_1.view_mut());
-                self.matmul_unchecked(lhs_2_1, rhs_1_2, out_2_2.view_mut());
-                self.matmul_unchecked(lhs_2_2, rhs_2_2, out_2_2.view_mut());
+                self.matmul_unchecked(lhs_parts[0][0], rhs_parts[0][0], out_parts[0][0].view_mut());
+                self.matmul_unchecked(lhs_parts[0][1], rhs_parts[1][0], out_parts[0][0].view_mut());
+                self.matmul_unchecked(lhs_parts[0][0], rhs_parts[0][1], out_parts[0][1].view_mut());
+                self.matmul_unchecked(lhs_parts[0][1], rhs_parts[1][1], out_parts[0][1].view_mut());
+                self.matmul_unchecked(lhs_parts[1][0], rhs_parts[0][0], out_parts[1][0].view_mut());
+                self.matmul_unchecked(lhs_parts[1][1], rhs_parts[1][0], out_parts[1][0].view_mut());
+                self.matmul_unchecked(lhs_parts[1][0], rhs_parts[0][1], out_parts[1][1].view_mut());
+                self.matmul_unchecked(lhs_parts[1][1], rhs_parts[1][1], out_parts[1][1].view_mut());
             }
 
             _ => unreachable!(),
         }
     }
 
-    fn matmul<'out, T: Elem>(
+    fn matmul<'out>(
         &self,
         lhs: Mat<T>,
         rhs: Mat<T>,
@@ -135,6 +138,66 @@ impl MatMul for DivideAndConquer {
                 elem.write(T::zero());
             });
             Ok(unsafe {
+                self.matmul_unchecked(lhs, rhs, out.view_mut());
+                out.assume_init()
+            })
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct Strassen<T> {
+    scratch: UnsafeCell<Array2<T>>,
+}
+
+impl<T: LinalgScalar> MatMul<T> for Strassen<T> {
+    unsafe fn matmul_unchecked(&self, lhs: Mat<T>, rhs: Mat<T>, mut out: MatMut<MaybeUninit<T>>) {
+        match lhs.shape() {
+            [1, 1] => unsafe {
+                let out_elem = out.uget_mut((0, 0)).assume_init_mut();
+                *out_elem = *out_elem + *lhs.uget((0, 0)) * *rhs.uget((0, 0));
+            },
+
+            [n, _] => {
+                let mid = n / 2;
+                let lhs_parts = square_partition(lhs, mid);
+                let rhs_parts = square_partition(rhs, mid);
+                let mut out_parts = square_partition_mut(out, mid);
+
+                self.matmul_unchecked(lhs_parts[0][0], rhs_parts[0][0], out_parts[0][0].view_mut());
+                self.matmul_unchecked(lhs_parts[0][1], rhs_parts[1][0], out_parts[0][0].view_mut());
+                self.matmul_unchecked(lhs_parts[0][0], rhs_parts[0][1], out_parts[0][1].view_mut());
+                self.matmul_unchecked(lhs_parts[0][1], rhs_parts[1][1], out_parts[0][1].view_mut());
+                self.matmul_unchecked(lhs_parts[1][0], rhs_parts[0][0], out_parts[1][0].view_mut());
+                self.matmul_unchecked(lhs_parts[1][1], rhs_parts[1][0], out_parts[1][0].view_mut());
+                self.matmul_unchecked(lhs_parts[1][0], rhs_parts[0][1], out_parts[1][1].view_mut());
+                self.matmul_unchecked(lhs_parts[1][1], rhs_parts[1][1], out_parts[1][1].view_mut());
+            }
+
+            _ => unreachable!(),
+        }
+    }
+
+    fn matmul<'out>(
+        &self,
+        lhs: Mat<T>,
+        rhs: Mat<T>,
+        mut out: MatMut<'out, MaybeUninit<T>>,
+    ) -> Result<MatMut<'out, T>, MatMulError> {
+        let ((a, b), (c, d), (e, f)) = (lhs.dim(), rhs.dim(), out.dim());
+        if a.count_ones() != 1 || [b, c, d, e, f].iter().any(|&x| x != a) {
+            Err(MatMulError::Other(concat!(
+                "Strassen algorithm requires",
+                " two NxN input matrices",
+                " and one NxN output matrix,",
+                " where N is a power of 2.",
+            )))
+        } else {
+            out.map_inplace(|elem| {
+                elem.write(T::zero());
+            });
+            Ok(unsafe {
+                *self.scratch.get() = Array2::<T>::zeros((a / 2, b / 2));
                 self.matmul_unchecked(lhs, rhs, out.view_mut());
                 out.assume_init()
             })
@@ -175,7 +238,11 @@ mod tests {
 
     const N: usize = 256;
 
-    fn test<T: Elem + Display>(lhs: ArrayView2<T>, rhs: ArrayView2<T>, matmul: impl MatMul) {
+    fn test<T: LinalgScalar + Display>(
+        lhs: ArrayView2<T>,
+        rhs: ArrayView2<T>,
+        matmul: impl MatMul<T>,
+    ) {
         let mut out = matrix_of::<_, N, N>(MaybeUninit::uninit);
 
         let before = Instant::now();
