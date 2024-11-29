@@ -27,7 +27,7 @@ pub fn fifty_thousand_of<T>(f: impl FnMut() -> T) -> [T; 50_000] {
 }
 
 pub fn matrix_of<T: Clone, const M: usize, const N: usize>(mut f: impl FnMut() -> T) -> Array2<T> {
-    arr2(&array_of::<_, N>(|| array_of::<_, M>(&mut f)))
+    arr2(&array_of::<_, M>(|| array_of::<_, N>(&mut f)))
 }
 
 pub fn fill_with<T>(mut f: impl FnMut() -> T) -> impl FnMut(&mut [MaybeUninit<T>]) -> &mut [T] {
