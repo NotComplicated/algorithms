@@ -1,17 +1,16 @@
-use ndarray::{linalg, prelude::*, LinalgScalar};
+use ndarray::{linalg, prelude::*, LinalgScalar, Zip};
 use std::{error::Error, fmt, mem::MaybeUninit};
 
 pub type Mat<'a, T> = ArrayView2<'a, T>;
 pub type MatMut<'a, T> = ArrayViewMut2<'a, T>;
 
+pub trait Elem: LinalgScalar + Send + Sync {}
+
+impl<T: LinalgScalar + Send + Sync> Elem for T {}
+
 pub trait MatMul {
-    unsafe fn matmul_unchecked<T: LinalgScalar>(
-        &self,
-        lhs: Mat<T>,
-        rhs: Mat<T>,
-        out: MatMut<MaybeUninit<T>>,
-    );
-    fn matmul<'out, T: LinalgScalar>(
+    fn matmul_impl<T: Elem>(&self, lhs: Mat<T>, rhs: Mat<T>, out: MatMut<MaybeUninit<T>>);
+    fn matmul<'out, T: Elem>(
         &self,
         lhs: Mat<T>,
         rhs: Mat<T>,
@@ -21,10 +20,8 @@ pub trait MatMul {
         if b != c || a != e || d != f {
             Err(MatMulError((a, b), (c, d)))
         } else {
-            let out = unsafe {
-                self.matmul_unchecked(lhs, rhs, out.view_mut());
-                out.assume_init()
-            };
+            self.matmul_impl(lhs, rhs, out.view_mut());
+            let out = unsafe { out.assume_init() };
             Ok(out)
         }
     }
@@ -33,30 +30,30 @@ pub trait MatMul {
 pub struct NdArray;
 
 impl MatMul for NdArray {
-    unsafe fn matmul_unchecked<T: LinalgScalar>(
-        &self,
-        lhs: Mat<T>,
-        rhs: Mat<T>,
-        mut out: MatMut<MaybeUninit<T>>,
-    ) {
+    fn matmul_impl<T: Elem>(&self, lhs: Mat<T>, rhs: Mat<T>, mut out: MatMut<MaybeUninit<T>>) {
         out.map_inplace(|elem| {
             elem.write(T::zero());
         });
-        let mut out = out.assume_init();
+        let mut out = unsafe { out.assume_init() };
         linalg::general_mat_mul(T::one(), &lhs, &rhs, T::zero(), &mut out);
     }
 }
 
-pub struct Naive;
+pub struct Naive<const PAR: bool = false>;
 
-impl MatMul for Naive {
-    unsafe fn matmul_unchecked<T: LinalgScalar>(
-        &self,
-        lhs: Mat<T>,
-        rhs: Mat<T>,
-        out: MatMut<MaybeUninit<T>>,
-    ) {
-        todo!()
+impl<const PAR: bool> MatMul for Naive<PAR> {
+    fn matmul_impl<T: Elem>(&self, lhs: Mat<T>, rhs: Mat<T>, mut out: MatMut<MaybeUninit<T>>) {
+        let indices = Zip::indexed(&mut out);
+        let per_elem = |(i, j), elem: &mut MaybeUninit<T>| {
+            let (lhs_row, rhs_col) = (lhs.row(i), rhs.column(j));
+            let zip = Zip::from(&lhs_row).and(&rhs_col);
+            elem.write(zip.fold(T::zero(), |acc, &l, &r| acc + l * r));
+        };
+        if PAR {
+            indices.par_for_each(per_elem);
+        } else {
+            indices.for_each(per_elem);
+        }
     }
 }
 
@@ -84,13 +81,9 @@ mod tests {
     use super::*;
     use crate::rand::*;
 
-    const N: usize = 3;
+    const N: usize = 500;
 
-    fn test<T: LinalgScalar + Display>(
-        lhs: ArrayView2<T>,
-        rhs: ArrayView2<T>,
-        matmul: impl MatMul,
-    ) {
+    fn test<T: Elem + Display>(lhs: ArrayView2<T>, rhs: ArrayView2<T>, matmul: impl MatMul) {
         let mut out = matrix_of::<_, N, N>(MaybeUninit::uninit);
 
         let before = Instant::now();
@@ -118,16 +111,30 @@ mod tests {
     }
 
     #[test]
-    fn naive() {
+    fn naive_single_thread() {
         test(
             matrix_of::<_, N, N>(|| range(0..10)).view(),
             matrix_of::<_, N, N>(|| range(0..10)).view(),
-            Naive,
+            Naive::<false>,
         );
         test(
             matrix_of::<_, N, N>(float).view(),
             matrix_of::<_, N, N>(float).view(),
-            Naive,
+            Naive::<false>,
+        );
+    }
+
+    #[test]
+    fn naive_multi_thread() {
+        test(
+            matrix_of::<_, N, N>(|| range(0..10)).view(),
+            matrix_of::<_, N, N>(|| range(0..10)).view(),
+            Naive::<true>,
+        );
+        test(
+            matrix_of::<_, N, N>(float).view(),
+            matrix_of::<_, N, N>(float).view(),
+            Naive::<true>,
         );
     }
 }
