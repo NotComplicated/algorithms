@@ -171,57 +171,75 @@ impl<T: LinalgScalar> MatMul<T> for Strassen<T> {
                 let rhs_parts = square_partition(rhs, mid);
                 let mut out_parts = square_partition_mut(out, mid);
 
-                macro_rules! s {
+                let mut s_mats: [_; 10] = array::from_fn(|i| unsafe {
+                    (*self.s_mats.get())[i].slice_mut(s![..mid, ..mid])
+                });
+                let mut p_mats: [_; 7] = array::from_fn(|i| unsafe {
+                    (*self.p_mats.get())[i].slice_mut(s![..mid, ..mid])
+                });
+
+                macro_rules! s_mat {
                     ($s_i:tt: $lhs:ident[$lhs_i:tt][$lhs_j:tt] $op:tt $rhs:ident[$rhs_i:tt][$rhs_j:tt]) => {
-                        let s = unsafe { &mut (*self.s_mats.get())[$s_i] };
                         azip! {
-                            (s in s, &lhs in &$lhs[$lhs_i][$lhs_j], &rhs in &$rhs[$rhs_i][$rhs_j]) {
+                            (s in &mut s_mats[$s_i], &lhs in &$lhs[$lhs_i][$lhs_j], &rhs in &$rhs[$rhs_i][$rhs_j]) {
                                 *s = lhs $op rhs;
                             }
                         }
                     };
                 }
-
-                s!(0: rhs_parts[0][1] - rhs_parts[1][1]);
-                s!(1: lhs_parts[0][0] + lhs_parts[0][1]);
-                s!(2: lhs_parts[1][0] + lhs_parts[1][1]);
-                s!(3: rhs_parts[1][0] - rhs_parts[0][0]);
-                s!(4: lhs_parts[0][0] + lhs_parts[1][1]);
-                s!(5: rhs_parts[0][0] + rhs_parts[1][1]);
-                s!(6: lhs_parts[0][1] - lhs_parts[1][1]);
-                s!(7: rhs_parts[1][0] + rhs_parts[1][1]);
-                s!(8: lhs_parts[0][0] - lhs_parts[1][0]);
-                s!(9: rhs_parts[0][0] + rhs_parts[0][1]);
+                s_mat!(0: rhs_parts[0][1] - rhs_parts[1][1]);
+                s_mat!(1: lhs_parts[0][0] + lhs_parts[0][1]);
+                s_mat!(2: lhs_parts[1][0] + lhs_parts[1][1]);
+                s_mat!(3: rhs_parts[1][0] - rhs_parts[0][0]);
+                s_mat!(4: lhs_parts[0][0] + lhs_parts[1][1]);
+                s_mat!(5: rhs_parts[0][0] + rhs_parts[1][1]);
+                s_mat!(6: lhs_parts[0][1] - lhs_parts[1][1]);
+                s_mat!(7: rhs_parts[1][0] + rhs_parts[1][1]);
+                s_mat!(8: lhs_parts[0][0] - lhs_parts[1][0]);
+                s_mat!(9: rhs_parts[0][0] + rhs_parts[0][1]);
 
                 unsafe {
-                    let get_s = |i: usize| (*self.s_mats.get()).get_unchecked(i).view();
-                    let get_p = |i: usize| (*self.p_mats.get()).get_unchecked_mut(i).view_mut();
-
-                    self.matmul_unchecked(lhs_parts[0][0].view(), get_s(0), get_p(0));
-                    self.matmul_unchecked(get_s(1), rhs_parts[1][1].view(), get_p(1));
-                    self.matmul_unchecked(get_s(2), rhs_parts[0][0].view(), get_p(2));
-                    self.matmul_unchecked(lhs_parts[1][1].view(), get_s(3), get_p(3));
-                    self.matmul_unchecked(get_s(4), get_s(5), get_p(4));
-                    self.matmul_unchecked(get_s(6), get_s(7), get_p(5));
-                    self.matmul_unchecked(get_s(8), get_s(9), get_p(6));
+                    self.matmul_unchecked(
+                        lhs_parts[0][0].view(),
+                        s_mats[0].view(),
+                        p_mats[0].view_mut(),
+                    );
+                    self.matmul_unchecked(
+                        s_mats[1].view(),
+                        rhs_parts[1][1].view(),
+                        p_mats[1].view_mut(),
+                    );
+                    self.matmul_unchecked(
+                        s_mats[2].view(),
+                        rhs_parts[0][0].view(),
+                        p_mats[2].view_mut(),
+                    );
+                    self.matmul_unchecked(
+                        lhs_parts[1][1].view(),
+                        s_mats[3].view(),
+                        p_mats[3].view_mut(),
+                    );
+                    self.matmul_unchecked(s_mats[4].view(), s_mats[5].view(), p_mats[4].view_mut());
+                    self.matmul_unchecked(s_mats[6].view(), s_mats[7].view(), p_mats[5].view_mut());
+                    self.matmul_unchecked(s_mats[8].view(), s_mats[9].view(), p_mats[6].view_mut());
 
                     azip! {
-                        (out in &mut out_parts[0][0], p4 in get_p(4), p3 in get_p(3), p1 in get_p(1), p5 in get_p(5)) {
+                        (out in &mut out_parts[0][0], p4 in &p_mats[4], p3 in &p_mats[3], p1 in &p_mats[1], p5 in &p_mats[5]) {
                             out.write(p4.assume_init() + p3.assume_init() - p1.assume_init() + p5.assume_init());
                         }
                     }
                     azip! {
-                        (out in &mut out_parts[0][1], p0 in get_p(0), p1 in get_p(1)) {
+                        (out in &mut out_parts[0][1], p0 in &p_mats[0], p1 in &p_mats[1]) {
                             out.write(p0.assume_init() + p1.assume_init());
                         }
                     }
                     azip! {
-                        (out in &mut out_parts[1][0], p2 in get_p(2), p3 in get_p(3)) {
+                        (out in &mut out_parts[1][0], p2 in &p_mats[2], p3 in &p_mats[3]) {
                             out.write(p2.assume_init() + p3.assume_init());
                         }
                     }
                     azip! {
-                        (out in &mut out_parts[1][1], p4 in get_p(4), p0 in get_p(0), p2 in get_p(2), p6 in get_p(6)) {
+                        (out in &mut out_parts[1][1], p4 in &p_mats[4], p0 in &p_mats[0], p2 in &p_mats[2], p6 in &p_mats[6]) {
                             out.write(p4.assume_init() + p0.assume_init() - p2.assume_init() - p6.assume_init());
                         }
                     }
