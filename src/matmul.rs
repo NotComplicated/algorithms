@@ -1,4 +1,4 @@
-use ndarray::{iter::Indices, linalg, prelude::*, LinalgScalar, Zip};
+use ndarray::{linalg, par_azip, prelude::*, LinalgScalar};
 use std::{array, cell::UnsafeCell, error::Error, fmt, mem::MaybeUninit};
 
 pub type Mat<'a, T> = ArrayView2<'a, T>;
@@ -38,37 +38,33 @@ impl<T: LinalgScalar> MatMul<T> for NdArray {
 
 pub struct Naive<const PAR: bool>;
 
-impl<const PAR: bool> Naive<PAR> {
-    fn zip_per_elem_impl<'a, T: LinalgScalar>(
-        &self,
-        lhs: Mat<'a, T>,
-        rhs: Mat<'a, T>,
-        out: MatMut<'a, MaybeUninit<T>>,
-    ) -> (
-        Zip<(Indices<Ix2>, ArrayViewMut2<'a, MaybeUninit<T>>), Ix2>,
-        impl Fn((usize, usize), &'a mut MaybeUninit<T>) + use<'a, T, PAR>,
-    ) {
-        let indices = Zip::indexed(out);
-        let per_elem = move |(i, j), elem: &mut MaybeUninit<T>| {
-            let (lhs_row, rhs_col) = (lhs.row(i), rhs.column(j));
-            let zip = Zip::from(&lhs_row).and(&rhs_col);
-            elem.write(zip.fold(T::zero(), |acc, &l, &r| acc + l * r));
-        };
-        (indices, per_elem)
-    }
-}
-
 impl<T: LinalgScalar> MatMul<T> for Naive<false> {
     unsafe fn matmul_unchecked(&self, lhs: Mat<T>, rhs: Mat<T>, mut out: MatMut<MaybeUninit<T>>) {
-        let (indices, per_elem) = self.zip_per_elem_impl(lhs.view(), rhs.view(), out.view_mut());
-        indices.for_each(per_elem);
+        azip! {
+            (index (i, j), out in &mut out) {
+                let out = out.write(T::zero());
+                azip! {
+                    (&lhs in &lhs.row(i), &rhs in &rhs.column(j)) {
+                        *out = *out + lhs * rhs;
+                    }
+                }
+            }
+        }
     }
 }
 
 impl<T: LinalgScalar + Send + Sync> MatMul<T> for Naive<true> {
     unsafe fn matmul_unchecked(&self, lhs: Mat<T>, rhs: Mat<T>, mut out: MatMut<MaybeUninit<T>>) {
-        let (indices, per_elem) = self.zip_per_elem_impl(lhs.view(), rhs.view(), out.view_mut());
-        indices.par_for_each(per_elem);
+        par_azip! {
+            (index (i, j), out in &mut out) {
+                let out = out.write(T::zero());
+                azip! {
+                    (&lhs in &lhs.row(i), &rhs in &rhs.column(j)) {
+                        *out = *out + lhs * rhs;
+                    }
+                }
+            }
+        }
     }
 }
 

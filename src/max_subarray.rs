@@ -38,7 +38,7 @@ pub struct DivideAndConquer;
 
 impl MaxSubarray for DivideAndConquer {
     fn max_subarray<'a, T: Elem>(&self, arr: &'a [T]) -> (&'a [T], Option<T>) {
-        if let [] = arr {
+        if arr.is_empty() {
             (&[], None)
         } else if let [elem] = arr {
             (arr, Some(elem.clone()))
@@ -57,8 +57,8 @@ impl MaxSubarray for DivideAndConquer {
                     }
                 }
                 sum = T::default();
-                for i in mid..arr.len() {
-                    sum = sum + &arr[i];
+                for (i, item) in arr.iter().enumerate().skip(mid) {
+                    sum = sum + item;
                     if r_sum.as_ref().is_none_or(|r_sum| r_sum < &sum) {
                         r_sum = Some(sum.clone());
                         r = i;
