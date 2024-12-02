@@ -1,5 +1,5 @@
 use ndarray::{linalg, par_azip, prelude::*, LinalgScalar};
-use std::{array, cell::UnsafeCell, error::Error, fmt, mem::MaybeUninit};
+use std::{array, error::Error, fmt, mem::MaybeUninit};
 
 pub type Mat<'a, T> = ArrayView2<'a, T>;
 pub type MatMut<'a, T> = ArrayViewMut2<'a, T>;
@@ -141,23 +141,9 @@ impl<T: LinalgScalar> MatMul<T> for DivideAndConquer {
     }
 }
 
-pub struct Strassen<T> {
-    s_mats: UnsafeCell<[Array2<T>; 10]>,
-    p_mats: UnsafeCell<[Array2<MaybeUninit<T>>; 7]>,
-}
+pub struct Strassen;
 
-impl<T> Default for Strassen<T> {
-    fn default() -> Self {
-        Self {
-            s_mats: UnsafeCell::new(array::from_fn(|_| {
-                Array2::from_shape_fn((0, 0), |_| unreachable!())
-            })),
-            p_mats: UnsafeCell::new(array::from_fn(|_| Array2::uninit((0, 0)))),
-        }
-    }
-}
-
-impl<T: LinalgScalar> MatMul<T> for Strassen<T> {
+impl<T: LinalgScalar> MatMul<T> for Strassen {
     unsafe fn matmul_unchecked(&self, lhs: Mat<T>, rhs: Mat<T>, mut out: MatMut<MaybeUninit<T>>) {
         match lhs.shape() {
             [1, 1] => unsafe {
@@ -165,63 +151,39 @@ impl<T: LinalgScalar> MatMul<T> for Strassen<T> {
                 *out_elem = *out_elem + *lhs.uget((0, 0)) * *rhs.uget((0, 0));
             },
 
-            [n, _] => {
+            &[n, _] => {
                 let mid = n / 2;
                 let lhs_parts = square_partition(lhs, mid);
                 let rhs_parts = square_partition(rhs, mid);
                 let mut out_parts = square_partition_mut(out, mid);
 
-                let mut s_mats: [_; 10] = array::from_fn(|i| unsafe {
-                    (*self.s_mats.get())[i].slice_mut(s![..mid, ..mid])
-                });
-                let mut p_mats: [_; 7] = array::from_fn(|i| unsafe {
-                    (*self.p_mats.get())[i].slice_mut(s![..mid, ..mid])
-                });
+                let s1 = &rhs_parts[0][1] - &rhs_parts[1][1];
+                let s2 = &lhs_parts[0][0] + &lhs_parts[0][1];
+                let s3 = &lhs_parts[1][0] + &lhs_parts[1][1];
+                let s4 = &rhs_parts[1][0] - &rhs_parts[0][0];
+                let s5 = &lhs_parts[0][0] + &lhs_parts[1][1];
+                let s6 = &rhs_parts[0][0] + &rhs_parts[1][1];
+                let s7 = &lhs_parts[0][1] - &lhs_parts[1][1];
+                let s8 = &rhs_parts[1][0] + &rhs_parts[1][1];
+                let s9 = &lhs_parts[0][0] - &lhs_parts[1][0];
+                let s10 = &rhs_parts[0][0] + &rhs_parts[0][1];
 
-                macro_rules! s_mat {
-                    ($s_i:tt: $lhs:ident[$lhs_i:tt][$lhs_j:tt] $op:tt $rhs:ident[$rhs_i:tt][$rhs_j:tt]) => {
-                        azip! {
-                            (s in &mut s_mats[$s_i], &lhs in &$lhs[$lhs_i][$lhs_j], &rhs in &$rhs[$rhs_i][$rhs_j]) {
-                                *s = lhs $op rhs;
-                            }
-                        }
-                    };
-                }
-                s_mat!(0: rhs_parts[0][1] - rhs_parts[1][1]);
-                s_mat!(1: lhs_parts[0][0] + lhs_parts[0][1]);
-                s_mat!(2: lhs_parts[1][0] + lhs_parts[1][1]);
-                s_mat!(3: rhs_parts[1][0] - rhs_parts[0][0]);
-                s_mat!(4: lhs_parts[0][0] + lhs_parts[1][1]);
-                s_mat!(5: rhs_parts[0][0] + rhs_parts[1][1]);
-                s_mat!(6: lhs_parts[0][1] - lhs_parts[1][1]);
-                s_mat!(7: rhs_parts[1][0] + rhs_parts[1][1]);
-                s_mat!(8: lhs_parts[0][0] - lhs_parts[1][0]);
-                s_mat!(9: rhs_parts[0][0] + rhs_parts[0][1]);
+                let mut p_mats: [_; 7] = array::from_fn(|_| {
+                    let mut p_mat = Array2::uninit((mid, mid));
+                    p_mat.map_inplace(|elem| {
+                        elem.write(T::zero());
+                    });
+                    p_mat
+                });
 
                 unsafe {
-                    self.matmul_unchecked(
-                        lhs_parts[0][0].view(),
-                        s_mats[0].view(),
-                        p_mats[0].view_mut(),
-                    );
-                    self.matmul_unchecked(
-                        s_mats[1].view(),
-                        rhs_parts[1][1].view(),
-                        p_mats[1].view_mut(),
-                    );
-                    self.matmul_unchecked(
-                        s_mats[2].view(),
-                        rhs_parts[0][0].view(),
-                        p_mats[2].view_mut(),
-                    );
-                    self.matmul_unchecked(
-                        lhs_parts[1][1].view(),
-                        s_mats[3].view(),
-                        p_mats[3].view_mut(),
-                    );
-                    self.matmul_unchecked(s_mats[4].view(), s_mats[5].view(), p_mats[4].view_mut());
-                    self.matmul_unchecked(s_mats[6].view(), s_mats[7].view(), p_mats[5].view_mut());
-                    self.matmul_unchecked(s_mats[8].view(), s_mats[9].view(), p_mats[6].view_mut());
+                    self.matmul_unchecked(lhs_parts[0][0].view(), s1.view(), p_mats[0].view_mut());
+                    self.matmul_unchecked(s2.view(), rhs_parts[1][1].view(), p_mats[1].view_mut());
+                    self.matmul_unchecked(s3.view(), rhs_parts[0][0].view(), p_mats[2].view_mut());
+                    self.matmul_unchecked(lhs_parts[1][1].view(), s4.view(), p_mats[3].view_mut());
+                    self.matmul_unchecked(s5.view(), s6.view(), p_mats[4].view_mut());
+                    self.matmul_unchecked(s7.view(), s8.view(), p_mats[5].view_mut());
+                    self.matmul_unchecked(s9.view(), s10.view(), p_mats[6].view_mut());
 
                     azip! {
                         (out in &mut out_parts[0][0], p4 in &p_mats[4], p3 in &p_mats[3], p1 in &p_mats[1], p5 in &p_mats[5]) {
@@ -268,10 +230,7 @@ impl<T: LinalgScalar> MatMul<T> for Strassen<T> {
             out.map_inplace(|elem| {
                 elem.write(T::zero());
             });
-            let n = a / 2;
             Ok(unsafe {
-                *self.s_mats.get() = array::from_fn(|_| Array2::<T>::zeros((n, n)));
-                *self.p_mats.get() = array::from_fn(|_| Array2::<T>::uninit((n, n)));
                 self.matmul_unchecked(lhs, rhs, out.view_mut());
                 out.assume_init()
             })
@@ -390,12 +349,12 @@ mod tests {
         test(
             matrix_of::<_, N, N>(|| range(0..10)).view(),
             matrix_of::<_, N, N>(|| range(0..10)).view(),
-            Strassen::default(),
+            Strassen,
         );
         test(
             matrix_of::<_, N, N>(float).view(),
             matrix_of::<_, N, N>(float).view(),
-            Strassen::default(),
+            Strassen,
         );
     }
 
