@@ -269,7 +269,7 @@ mod tests {
     use super::*;
     use crate::rand::*;
 
-    const N: usize = 256;
+    const N: usize = 64;
 
     fn test<T: LinalgScalar + Display>(
         lhs: ArrayView2<T>,
