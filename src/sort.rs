@@ -108,6 +108,51 @@ impl Sort for Quick {
     }
 }
 
+pub struct Heap;
+
+impl Heap {
+    unsafe fn max_heapify(&self, items: &mut [impl Ord], i: usize) {
+        let (l, r) = (i * 2, i * 2 + 1);
+        let &(largest, _) = unsafe {
+            [
+                (i, Some(items.get_unchecked(i))),
+                (l, items.get(l)),
+                (r, items.get(r)),
+            ]
+            .iter()
+            .max_by_key(|&(_, item)| item)
+            .unwrap_unchecked()
+        };
+
+        if largest != i {
+            unsafe {
+                swap(items, i, largest);
+                self.max_heapify(items, largest);
+            }
+        }
+    }
+
+    fn build_max_heap(&self, items: &mut [impl Ord]) {
+        for i in (0..items.len() / 2).rev() {
+            unsafe { self.max_heapify(items, i) };
+        }
+    }
+}
+
+impl Sort for Heap {
+    fn sort(&self, items: &mut [impl Ord]) {
+        if !items.is_empty() {
+            self.build_max_heap(items);
+            for i in (1..items.len()).rev() {
+                unsafe {
+                    swap(items, 0, i);
+                    self.max_heapify(&mut items[..i], 0);
+                }
+            }
+        }
+    }
+}
+
 macro_rules! ordfloat {
     ($ord:ident($float:ty)) => {
         #[derive(PartialOrd, Copy, Clone, Default, Debug)]
@@ -290,12 +335,34 @@ mod tests {
     }
 
     #[test]
+    fn heap_sort_int() {
+        test(Heap, ten_of(int));
+        test(Heap, hundred_of(int));
+        test(Heap, thousand_of(int));
+    }
+
+    #[test]
+    fn heap_sort_string() {
+        test(Heap, ten_of(string));
+        test(Heap, hundred_of(string));
+        test(Heap, thousand_of(string));
+    }
+
+    #[test]
+    fn heap_sort_custom() {
+        test(Heap, ten_of(Custom::random));
+        test(Heap, hundred_of(Custom::random));
+        test(Heap, thousand_of(Custom::random));
+    }
+
+    #[test]
     fn ord_float() {
         test(Stdlib, hundred_of(float).map(OrdF32));
         test(Insertion, hundred_of(float).map(OrdF32));
         test(Selection, hundred_of(float).map(OrdF32));
         test(Merge, hundred_of(float).map(OrdF32));
         test(Quick, hundred_of(float).map(OrdF32));
+        test(Heap, hundred_of(float).map(OrdF32));
     }
 
     #[test]
@@ -306,5 +373,6 @@ mod tests {
         test(Selection, fifty_thousand_of(int));
         test(Merge, fifty_thousand_of(int));
         test(Quick, fifty_thousand_of(int));
+        test(Heap, fifty_thousand_of(int));
     }
 }

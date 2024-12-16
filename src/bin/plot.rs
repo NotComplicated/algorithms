@@ -75,6 +75,7 @@ fn main() {
     plot(sort::Selection, &mut axes);
     plot(sort::Merge, &mut axes);
     plot(sort::Quick, &mut axes);
+    plot(sort::Heap, &mut axes);
     plot(sort::Stdlib, &mut axes);
 
     figure.show().unwrap();
