@@ -1,4 +1,13 @@
-use std::{borrow::Borrow, cmp::Ordering, iter::FusedIterator, marker::PhantomData, ptr::NonNull};
+use std::{
+    borrow::Borrow,
+    cmp::Ordering,
+    fmt,
+    hash::{Hash, Hasher},
+    iter::FusedIterator,
+    marker::PhantomData,
+    ops::Index,
+    ptr::NonNull,
+};
 
 #[derive(Copy, Clone, PartialEq)]
 enum Color {
@@ -10,7 +19,7 @@ type NodeRef<K, V> = Option<NonNull<Node<K, V>>>;
 
 struct Node<K, V> {
     key: K,
-    val: V,
+    value: V,
     color: Color,
     parent: NodeRef<K, V>,
     left: NodeRef<K, V>,
@@ -20,7 +29,7 @@ struct Node<K, V> {
 impl<K, V> Node<K, V> {
     fn new(
         key: K,
-        val: V,
+        value: V,
         color: Color,
         parent: NodeRef<K, V>,
         left: NodeRef<K, V>,
@@ -29,7 +38,7 @@ impl<K, V> Node<K, V> {
         Some(unsafe {
             NonNull::new_unchecked(Box::into_raw(Box::new(Node {
                 key,
-                val,
+                value,
                 color,
                 parent: None,
                 left: None,
@@ -43,6 +52,47 @@ fn color<K, V>(node_ref: NodeRef<K, V>) -> Color {
     node_ref.map_or(Color::Black, |node_ptr| unsafe { node_ptr.as_ref() }.color)
 }
 
+fn leftmost<K, V>(mut node_ref: NodeRef<K, V>) -> NodeRef<K, V> {
+    let mut left = node_ref;
+    while let Some(node_ptr) = node_ref {
+        left = node_ref;
+        node_ref = unsafe { node_ptr.as_ref() }.left;
+    }
+    left
+}
+
+fn rightmost<K, V>(mut node_ref: NodeRef<K, V>) -> NodeRef<K, V> {
+    let mut right = node_ref;
+    while let Some(node_ptr) = node_ref {
+        right = node_ref;
+        node_ref = unsafe { node_ptr.as_ref() }.right;
+    }
+    right
+}
+
+fn clone_subtree<K: Clone, V: Clone>(
+    node_ref: NodeRef<K, V>,
+    parent: NodeRef<K, V>,
+) -> NodeRef<K, V> {
+    node_ref.and_then(|node_ptr| {
+        let node = unsafe { node_ptr.as_ref() };
+        let clone = Node::new(
+            node.key.clone(),
+            node.value.clone(),
+            node.color,
+            parent,
+            None,
+            None,
+        );
+        unsafe {
+            let clone_ptr = clone.unwrap_unchecked().as_ptr();
+            (*clone_ptr).left = clone_subtree(node.left, clone);
+            (*clone_ptr).right = clone_subtree(node.right, clone);
+        }
+        clone
+    })
+}
+
 fn drop_subtree<K, V>(node_ref: &mut NodeRef<K, V>) {
     if let Some(node_ptr) = node_ref.take() {
         let mut node = unsafe { Box::from_raw(node_ptr.as_ptr()) };
@@ -51,18 +101,28 @@ fn drop_subtree<K, V>(node_ref: &mut NodeRef<K, V>) {
     }
 }
 
+#[derive(Default)]
 pub struct Tree<K, V> {
     root: NodeRef<K, V>,
+    len: usize,
 }
 
 impl<K, V> Tree<K, V> {
     pub fn new() -> Self {
-        Tree { root: None }
+        Tree { root: None, len: 0 }
     }
 
-    pub fn get<Q: Ord>(&self, key: &Q) -> Option<&V>
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.root.is_none()
+    }
+
+    pub fn get<Q: ?Sized + Ord>(&self, key: &Q) -> Option<&V>
     where
-        K: Borrow<Q>,
+        K: Borrow<Q> + Ord,
     {
         let mut node_ref = self.root;
         loop {
@@ -70,14 +130,14 @@ impl<K, V> Tree<K, V> {
             node_ref = match key.borrow().cmp(&node.key.borrow()) {
                 Ordering::Less => node.left,
                 Ordering::Greater => node.right,
-                Ordering::Equal => break Some(&node.val),
+                Ordering::Equal => break Some(&node.value),
             }
         }
     }
 
-    pub fn get_mut<Q: Ord>(&mut self, key: &Q) -> Option<&mut V>
+    pub fn get_mut<Q: ?Sized + Ord>(&mut self, key: &Q) -> Option<&mut V>
     where
-        K: Borrow<Q>,
+        K: Borrow<Q> + Ord,
     {
         let mut node_ref = self.root;
         loop {
@@ -85,9 +145,16 @@ impl<K, V> Tree<K, V> {
             node_ref = match key.borrow().cmp(&node.key.borrow()) {
                 Ordering::Less => node.left,
                 Ordering::Greater => node.right,
-                Ordering::Equal => break Some(&mut node.val),
+                Ordering::Equal => break Some(&mut node.value),
             }
         }
+    }
+
+    pub fn contains_key<Q: ?Sized + Ord>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q> + Ord,
+    {
+        self.get(key).is_some()
     }
 
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&K, &V)> {
@@ -95,15 +162,81 @@ impl<K, V> Tree<K, V> {
     }
 
     pub fn keys(&self) -> impl DoubleEndedIterator<Item = &K> {
-        self.into_iter().map(|(k, _)| k)
+        self.into_iter().map(|(key, _)| key)
     }
 
     pub fn values(&self) -> impl DoubleEndedIterator<Item = &V> {
-        self.into_iter().map(|(_, v)| v)
+        self.into_iter().map(|(_, value)| value)
     }
 
     pub fn values_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut V> {
-        self.into_iter()
+        self.into_iter().map(|(_, value)| value)
+    }
+
+    pub fn min(&self) -> Option<(&K, &V)> {
+        leftmost(self.root).map(|node_ptr| {
+            let node = unsafe { node_ptr.as_ref() };
+            (&node.key, &node.value)
+        })
+    }
+
+    pub fn max(&self) -> Option<(&K, &V)> {
+        rightmost(self.root).map(|node_ptr| {
+            let node = unsafe { node_ptr.as_ref() };
+            (&node.key, &node.value)
+        })
+    }
+}
+
+impl<K: PartialEq, V: PartialEq> PartialEq for Tree<K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.len == other.len && self.iter().eq(other)
+    }
+}
+
+impl<K: Eq, V: Eq> Eq for Tree<K, V> {}
+
+impl<K: PartialOrd, V: PartialOrd> PartialOrd for Tree<K, V> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.iter().partial_cmp(other)
+    }
+}
+
+impl<K: Ord, V: Ord> Ord for Tree<K, V> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.iter().cmp(other)
+    }
+}
+
+impl<K: Clone, V: Clone> Clone for Tree<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            root: clone_subtree(self.root, None),
+            len: self.len,
+        }
+    }
+}
+
+impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for Tree<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_map().entries(self.iter()).finish()
+    }
+}
+
+impl<Q: ?Sized + Ord, K: Borrow<Q> + Ord, V> Index<&Q> for Tree<K, V> {
+    type Output = V;
+
+    fn index(&self, key: &Q) -> &V {
+        self.get(key).expect("no entry found for key")
+    }
+}
+
+impl<K: Hash, V: Hash> Hash for Tree<K, V> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for (key, value) in self {
+            key.hash(state);
+            value.hash(state);
+        }
     }
 }
 
@@ -117,7 +250,7 @@ impl<'tree, K, V> IntoIterator for &'tree Tree<K, V> {
 }
 
 impl<'tree, K, V> IntoIterator for &'tree mut Tree<K, V> {
-    type Item = &'tree mut V;
+    type Item = (&'tree K, &'tree mut V);
     type IntoIter = Inorder<K, V, &'tree mut ()>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -134,27 +267,15 @@ impl<K, V> Drop for Tree<K, V> {
 pub struct Inorder<K, V, Ref> {
     left: NodeRef<K, V>,
     right: NodeRef<K, V>,
-    _ref: PhantomData<Ref>,
+    phantom: PhantomData<Ref>,
 }
 
 impl<K, V, Ref> Inorder<K, V, Ref> {
     fn new(root: NodeRef<K, V>) -> Self {
-        let mut node_ref = root;
-        let mut left = node_ref;
-        while let Some(node_ptr) = node_ref {
-            left = node_ref;
-            node_ref = unsafe { node_ptr.as_ref() }.left;
-        }
-        node_ref = root;
-        let mut right = node_ref;
-        while let Some(node_ptr) = node_ref {
-            right = node_ref;
-            node_ref = unsafe { node_ptr.as_ref() }.right;
-        }
         Self {
-            left,
-            right,
-            _ref: PhantomData,
+            left: leftmost(root),
+            right: rightmost(root),
+            phantom: PhantomData,
         }
     }
 }
@@ -186,7 +307,7 @@ impl<'tree, K: 'tree, V: 'tree> Iterator for Inorder<K, V, &'tree ()> {
                 }
             }
         }
-        Some((&node.key, &node.val))
+        Some((&node.key, &node.value))
     }
 }
 
@@ -213,12 +334,12 @@ impl<'tree, K: 'tree, V: 'tree> DoubleEndedIterator for Inorder<K, V, &'tree ()>
                 }
             }
         }
-        Some((&node.key, &node.val))
+        Some((&node.key, &node.value))
     }
 }
 
 impl<'tree, K: 'tree, V: 'tree> Iterator for Inorder<K, V, &'tree mut ()> {
-    type Item = &'tree mut V;
+    type Item = (&'tree K, &'tree mut V);
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut node_ptr = self.left?;
@@ -242,7 +363,7 @@ impl<'tree, K: 'tree, V: 'tree> Iterator for Inorder<K, V, &'tree mut ()> {
                 }
             }
         }
-        Some(&mut node.val)
+        Some((&node.key, &mut node.value))
     }
 }
 
@@ -269,6 +390,40 @@ impl<'tree, K: 'tree, V: 'tree> DoubleEndedIterator for Inorder<K, V, &'tree mut
                 }
             }
         }
-        Some(&mut node.val)
+        Some((&node.key, &mut node.value))
+    }
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Default, Clone, Hash)]
+pub struct Set<T>(Tree<T, ()>);
+
+impl<T> Set<T> {
+    pub fn new() -> Self {
+        Self(Tree::new())
+    }
+
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
+        self.0.into_iter().map(|(key, _)| key)
+    }
+
+    pub fn contains<Q: Ord>(&self, item: &Q) -> bool
+    where
+        T: Borrow<Q> + Ord,
+    {
+        self.0.contains_key(item)
+    }
+
+    pub fn min(&self) -> Option<&T> {
+        self.0.min().map(|(key, _)| key)
+    }
+
+    pub fn max(&self) -> Option<&T> {
+        self.0.max().map(|(key, _)| key)
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for Set<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_set().entries(self.iter()).finish()
     }
 }
