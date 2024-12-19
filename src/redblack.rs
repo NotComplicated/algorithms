@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, cmp::Ordering, marker::PhantomData, ptr::NonNull};
+use std::{borrow::Borrow, cmp::Ordering, iter::FusedIterator, marker::PhantomData, ptr::NonNull};
 
 #[derive(Copy, Clone, PartialEq)]
 enum Color {
@@ -101,30 +101,27 @@ impl<K, V> Tree<K, V> {
     pub fn values(&self) -> impl DoubleEndedIterator<Item = &V> {
         self.into_iter().map(|(_, v)| v)
     }
+
+    pub fn values_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut V> {
+        self.into_iter()
+    }
 }
 
 impl<'tree, K, V> IntoIterator for &'tree Tree<K, V> {
     type Item = (&'tree K, &'tree V);
-    type IntoIter = Inorder<'tree, K, V>;
+    type IntoIter = Inorder<K, V, &'tree ()>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let mut node_ref = self.root;
-        let mut left = node_ref;
-        while let Some(node_ptr) = node_ref {
-            left = node_ref;
-            node_ref = unsafe { node_ptr.as_ref() }.left;
-        }
-        node_ref = self.root;
-        let mut right = node_ref;
-        while let Some(node_ptr) = node_ref {
-            right = node_ref;
-            node_ref = unsafe { node_ptr.as_ref() }.right;
-        }
-        Self::IntoIter {
-            left,
-            right,
-            _ref: PhantomData,
-        }
+        Self::IntoIter::new(self.root)
+    }
+}
+
+impl<'tree, K, V> IntoIterator for &'tree mut Tree<K, V> {
+    type Item = &'tree mut V;
+    type IntoIter = Inorder<K, V, &'tree mut ()>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Self::IntoIter::new(self.root)
     }
 }
 
@@ -134,13 +131,37 @@ impl<K, V> Drop for Tree<K, V> {
     }
 }
 
-pub struct Inorder<'tree, K, V> {
+pub struct Inorder<K, V, Ref> {
     left: NodeRef<K, V>,
     right: NodeRef<K, V>,
-    _ref: PhantomData<&'tree ()>,
+    _ref: PhantomData<Ref>,
 }
 
-impl<'tree, K: 'tree, V: 'tree> Iterator for Inorder<'tree, K, V> {
+impl<K, V, Ref> Inorder<K, V, Ref> {
+    fn new(root: NodeRef<K, V>) -> Self {
+        let mut node_ref = root;
+        let mut left = node_ref;
+        while let Some(node_ptr) = node_ref {
+            left = node_ref;
+            node_ref = unsafe { node_ptr.as_ref() }.left;
+        }
+        node_ref = root;
+        let mut right = node_ref;
+        while let Some(node_ptr) = node_ref {
+            right = node_ref;
+            node_ref = unsafe { node_ptr.as_ref() }.right;
+        }
+        Self {
+            left,
+            right,
+            _ref: PhantomData,
+        }
+    }
+}
+
+impl<K, V, Ref> FusedIterator for Inorder<K, V, Ref> where Self: Iterator {}
+
+impl<'tree, K: 'tree, V: 'tree> Iterator for Inorder<K, V, &'tree ()> {
     type Item = (&'tree K, &'tree V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -169,7 +190,7 @@ impl<'tree, K: 'tree, V: 'tree> Iterator for Inorder<'tree, K, V> {
     }
 }
 
-impl<'tree, K: 'tree, V: 'tree> DoubleEndedIterator for Inorder<'tree, K, V> {
+impl<'tree, K: 'tree, V: 'tree> DoubleEndedIterator for Inorder<K, V, &'tree ()> {
     fn next_back(&mut self) -> Option<Self::Item> {
         let node_ptr = self.right?;
         let node = unsafe { node_ptr.as_ref() };
@@ -193,5 +214,61 @@ impl<'tree, K: 'tree, V: 'tree> DoubleEndedIterator for Inorder<'tree, K, V> {
             }
         }
         Some((&node.key, &node.val))
+    }
+}
+
+impl<'tree, K: 'tree, V: 'tree> Iterator for Inorder<K, V, &'tree mut ()> {
+    type Item = &'tree mut V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut node_ptr = self.left?;
+        let node = unsafe { node_ptr.as_mut() };
+        if node_ptr == unsafe { self.right.unwrap_unchecked() } {
+            (self.left, self.right) = (None, None);
+        } else if node.right.is_some() {
+            let mut node_ref = node.right;
+            self.left = node_ref;
+            while let Some(node_ptr) = node_ref {
+                self.left = node_ref;
+                node_ref = unsafe { node_ptr.as_ref() }.left;
+            }
+        } else {
+            loop {
+                let node_ref = self.left;
+                self.left = unsafe { self.left.unwrap_unchecked().as_ref() }.parent;
+                let left = unsafe { self.left.unwrap_unchecked().as_ref() }.left;
+                if left == node_ref {
+                    break;
+                }
+            }
+        }
+        Some(&mut node.val)
+    }
+}
+
+impl<'tree, K: 'tree, V: 'tree> DoubleEndedIterator for Inorder<K, V, &'tree mut ()> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let mut node_ptr = self.right?;
+        let node = unsafe { node_ptr.as_mut() };
+        if node_ptr == unsafe { self.left.unwrap_unchecked() } {
+            (self.left, self.right) = (None, None);
+        } else if node.left.is_some() {
+            let mut node_ref = node.left;
+            self.right = node_ref;
+            while let Some(node_ptr) = node_ref {
+                self.right = node_ref;
+                node_ref = unsafe { node_ptr.as_ref() }.right;
+            }
+        } else {
+            loop {
+                let node_ref = self.right;
+                self.right = unsafe { self.right.unwrap_unchecked().as_ref() }.parent;
+                let right = unsafe { self.right.unwrap_unchecked().as_ref() }.right;
+                if right == node_ref {
+                    break;
+                }
+            }
+        }
+        Some(&mut node.val)
     }
 }
