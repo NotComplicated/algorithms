@@ -12,5 +12,11 @@ test-mod MOD:
 matmul:
     @just test-mod matmul
 
+max_subarray:
+    @just test-mod max_subarray
+
+redblack:
+    @just test-mod redblack
+
 sort:
     @just test-mod sort
