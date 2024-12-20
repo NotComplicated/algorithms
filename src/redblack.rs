@@ -5,6 +5,7 @@ use std::{
     hash::{Hash, Hasher},
     iter::FusedIterator,
     marker::PhantomData,
+    mem,
     ops::Index,
     ptr::NonNull,
 };
@@ -48,10 +49,6 @@ impl<K, V> Node<K, V> {
     }
 }
 
-fn color<K, V>(node_ref: NodeRef<K, V>) -> Color {
-    node_ref.map_or(Color::Black, |node_ptr| unsafe { node_ptr.as_ref() }.color)
-}
-
 fn leftmost<K, V>(mut node_ref: NodeRef<K, V>) -> NodeRef<K, V> {
     let mut left = node_ref;
     while let Some(node_ptr) = node_ref {
@@ -68,6 +65,122 @@ fn rightmost<K, V>(mut node_ref: NodeRef<K, V>) -> NodeRef<K, V> {
         node_ref = unsafe { node_ptr.as_ref() }.right;
     }
     right
+}
+
+fn rotate_left<K, V>(root_ref: &mut NodeRef<K, V>, mut node_ptr: NonNull<Node<K, V>>) {
+    let node = unsafe { node_ptr.as_mut() };
+    if let Some(mut right_ptr) = node.right {
+        let right = unsafe { right_ptr.as_mut() };
+        let right_left_ref = right.left;
+        node.right = right_left_ref;
+        if let Some(mut right_left_ptr) = right_left_ref {
+            unsafe { right_left_ptr.as_mut() }.parent = Some(node_ptr);
+        }
+        right.parent = node.parent;
+        if let Some(mut parent_ptr) = node.parent {
+            let parent = unsafe { parent_ptr.as_mut() };
+            if parent.left == Some(node_ptr) {
+                parent.left = Some(right_ptr);
+            } else {
+                parent.right = Some(right_ptr);
+            }
+        } else {
+            *root_ref = Some(right_ptr);
+        }
+        right.left = Some(node_ptr);
+        node.parent = Some(right_ptr);
+    }
+}
+
+fn rotate_right<K, V>(root_ref: &mut NodeRef<K, V>, mut node_ptr: NonNull<Node<K, V>>) {
+    let node = unsafe { node_ptr.as_mut() };
+    if let Some(mut left_ptr) = node.left {
+        let left = unsafe { left_ptr.as_mut() };
+        let left_right_ref = left.right;
+        node.left = left_right_ref;
+        if let Some(mut left_right_ptr) = left_right_ref {
+            unsafe { left_right_ptr.as_mut() }.parent = Some(node_ptr);
+        }
+        left.parent = node.parent;
+        if let Some(mut parent_ptr) = node.parent {
+            let parent = unsafe { parent_ptr.as_mut() };
+            if parent.left == Some(node_ptr) {
+                parent.left = Some(left_ptr);
+            } else {
+                parent.right = Some(left_ptr);
+            }
+        } else {
+            *root_ref = Some(left_ptr);
+        }
+        left.right = Some(node_ptr);
+        node.parent = Some(left_ptr);
+    }
+}
+
+fn fixup<K, V>(root_ref: &mut NodeRef<K, V>, mut node_ptr: NonNull<Node<K, V>>) {
+    loop {
+        let node = unsafe { node_ptr.as_mut() };
+        let Some(mut parent_ptr) = node.parent else {
+            break;
+        };
+        let parent = unsafe { parent_ptr.as_mut() };
+        if parent.color == Color::Black {
+            break;
+        }
+        let grandparent = unsafe { parent.parent.unwrap_unchecked().as_mut() };
+        if node.parent == grandparent.left {
+            let uncle_ref = grandparent.right;
+            if uncle_ref.is_some_and(|uncle_ptr| unsafe { uncle_ptr.as_ref().color } == Color::Red)
+            {
+                let uncle = unsafe { uncle_ref.unwrap_unchecked().as_mut() };
+                parent.color = Color::Black;
+                uncle.color = Color::Black;
+                grandparent.color = Color::Red;
+                node_ptr = unsafe { parent.parent.unwrap_unchecked() };
+            } else {
+                if parent.right == Some(node_ptr) {
+                    node_ptr = parent_ptr;
+                    drop((node, parent, grandparent));
+                    rotate_left(root_ref, node_ptr);
+                }
+                let node = unsafe { node_ptr.as_mut() };
+                let parent = unsafe { node.parent.unwrap_unchecked().as_mut() };
+                let mut grandparent_ptr = unsafe { parent.parent.unwrap_unchecked() };
+                let grandparent = unsafe { grandparent_ptr.as_mut() };
+                parent.color = Color::Black;
+                grandparent.color = Color::Red;
+                drop((node, parent, grandparent));
+                rotate_right(root_ref, grandparent_ptr);
+            }
+        } else {
+            let uncle_ref = grandparent.left;
+            if uncle_ref.is_some_and(|uncle_ptr| unsafe { uncle_ptr.as_ref().color } == Color::Red)
+            {
+                let uncle = unsafe { uncle_ref.unwrap_unchecked().as_mut() };
+                parent.color = Color::Black;
+                uncle.color = Color::Black;
+                grandparent.color = Color::Red;
+                node_ptr = unsafe { parent.parent.unwrap_unchecked() };
+            } else {
+                if parent.left == Some(node_ptr) {
+                    node_ptr = parent_ptr;
+                    drop((node, parent, grandparent));
+                    rotate_right(root_ref, node_ptr);
+                }
+                let node = unsafe { node_ptr.as_mut() };
+                let parent = unsafe { node.parent.unwrap_unchecked().as_mut() };
+                let mut grandparent_ptr = unsafe { parent.parent.unwrap_unchecked() };
+                let grandparent = unsafe { grandparent_ptr.as_mut() };
+                parent.color = Color::Black;
+                grandparent.color = Color::Red;
+                drop((node, parent, grandparent));
+                rotate_left(root_ref, grandparent_ptr);
+            }
+        }
+    }
+    if let Some(mut root_ptr) = *root_ref {
+        unsafe { root_ptr.as_mut() }.color = Color::Black;
+    }
 }
 
 fn clone_subtree<K: Clone, V: Clone>(
@@ -157,6 +270,37 @@ impl<K, V> Tree<K, V> {
         self.get(key).is_some()
     }
 
+    pub fn insert(&mut self, key: K, value: V) -> Option<V>
+    where
+        K: Ord,
+    {
+        let mut parent_ref = None;
+        let mut node_ref = self.root;
+        while let Some(mut node_ptr) = node_ref {
+            parent_ref = node_ref;
+            let node = unsafe { node_ptr.as_mut() };
+            node_ref = match key.cmp(&node.key) {
+                Ordering::Less => node.left,
+                Ordering::Greater => node.right,
+                Ordering::Equal => return Some(mem::replace(&mut node.value, value)),
+            };
+        }
+        if let Some(mut parent_ptr) = parent_ref {
+            let parent = unsafe { parent_ptr.as_mut() };
+            let child = if key < parent.key {
+                &mut parent.left
+            } else {
+                &mut parent.right
+            };
+            *child = Node::new(key, value, Color::Red, parent_ref, None, None);
+            fixup(&mut self.root, unsafe { child.unwrap_unchecked() });
+        } else {
+            self.root = Node::new(key, value, Color::Black, None, None, None);
+        }
+        self.len += 1;
+        None
+    }
+
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&K, &V)> {
         self.into_iter()
     }
@@ -205,6 +349,20 @@ impl<K: PartialOrd, V: PartialOrd> PartialOrd for Tree<K, V> {
 impl<K: Ord, V: Ord> Ord for Tree<K, V> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.iter().cmp(other)
+    }
+}
+
+impl<K: Ord, V> Extend<(K, V)> for Tree<K, V> {
+    fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
+        for (key, value) in iter {
+            self.insert(key, value);
+        }
+    }
+}
+
+impl<'a, K: Ord + Copy, V: Copy> Extend<(&'a K, &'a V)> for Tree<K, V> {
+    fn extend<T: IntoIterator<Item = (&'a K, &'a V)>>(&mut self, iter: T) {
+        self.extend(iter.into_iter().map(|(&key, &value)| (key, value)));
     }
 }
 
@@ -291,12 +449,7 @@ impl<'tree, K: 'tree, V: 'tree> Iterator for Inorder<K, V, &'tree ()> {
         if node_ptr == unsafe { self.right.unwrap_unchecked() } {
             (self.left, self.right) = (None, None);
         } else if node.right.is_some() {
-            let mut node_ref = node.right;
-            self.left = node_ref;
-            while let Some(node_ptr) = node_ref {
-                self.left = node_ref;
-                node_ref = unsafe { node_ptr.as_ref() }.left;
-            }
+            self.left = leftmost(node.right);
         } else {
             loop {
                 let node_ref = self.left;
@@ -318,12 +471,7 @@ impl<'tree, K: 'tree, V: 'tree> DoubleEndedIterator for Inorder<K, V, &'tree ()>
         if node_ptr == unsafe { self.left.unwrap_unchecked() } {
             (self.left, self.right) = (None, None);
         } else if node.left.is_some() {
-            let mut node_ref = node.left;
-            self.right = node_ref;
-            while let Some(node_ptr) = node_ref {
-                self.right = node_ref;
-                node_ref = unsafe { node_ptr.as_ref() }.right;
-            }
+            self.right = rightmost(node.left);
         } else {
             loop {
                 let node_ref = self.right;
@@ -347,12 +495,7 @@ impl<'tree, K: 'tree, V: 'tree> Iterator for Inorder<K, V, &'tree mut ()> {
         if node_ptr == unsafe { self.right.unwrap_unchecked() } {
             (self.left, self.right) = (None, None);
         } else if node.right.is_some() {
-            let mut node_ref = node.right;
-            self.left = node_ref;
-            while let Some(node_ptr) = node_ref {
-                self.left = node_ref;
-                node_ref = unsafe { node_ptr.as_ref() }.left;
-            }
+            self.left = leftmost(node.right);
         } else {
             loop {
                 let node_ref = self.left;
@@ -374,12 +517,7 @@ impl<'tree, K: 'tree, V: 'tree> DoubleEndedIterator for Inorder<K, V, &'tree mut
         if node_ptr == unsafe { self.left.unwrap_unchecked() } {
             (self.left, self.right) = (None, None);
         } else if node.left.is_some() {
-            let mut node_ref = node.left;
-            self.right = node_ref;
-            while let Some(node_ptr) = node_ref {
-                self.right = node_ref;
-                node_ref = unsafe { node_ptr.as_ref() }.right;
-            }
+            self.right = rightmost(node.left);
         } else {
             loop {
                 let node_ref = self.right;
