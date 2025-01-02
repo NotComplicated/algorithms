@@ -41,9 +41,9 @@ impl<K, V> Node<K, V> {
                 key,
                 value,
                 color,
-                parent: None,
-                left: None,
-                right: None,
+                parent,
+                left,
+                right,
             })))
         })
     }
@@ -214,7 +214,6 @@ fn drop_subtree<K, V>(node_ref: &mut NodeRef<K, V>) {
     }
 }
 
-#[derive(Default)]
 pub struct Tree<K, V> {
     root: NodeRef<K, V>,
     len: usize,
@@ -301,6 +300,11 @@ impl<K, V> Tree<K, V> {
         None
     }
 
+    pub fn clear(&mut self) {
+        drop_subtree(&mut self.root);
+        self.len = 0;
+    }
+
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&K, &V)> {
         self.into_iter()
     }
@@ -317,18 +321,24 @@ impl<K, V> Tree<K, V> {
         self.into_iter().map(|(_, value)| value)
     }
 
-    pub fn min(&self) -> Option<(&K, &V)> {
+    pub fn first(&self) -> Option<(&K, &V)> {
         leftmost(self.root).map(|node_ptr| {
             let node = unsafe { node_ptr.as_ref() };
             (&node.key, &node.value)
         })
     }
 
-    pub fn max(&self) -> Option<(&K, &V)> {
+    pub fn last(&self) -> Option<(&K, &V)> {
         rightmost(self.root).map(|node_ptr| {
             let node = unsafe { node_ptr.as_ref() };
             (&node.key, &node.value)
         })
+    }
+}
+
+impl<K, V> Default for Tree<K, V> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -353,7 +363,7 @@ impl<K: Ord, V: Ord> Ord for Tree<K, V> {
 }
 
 impl<K: Ord, V> Extend<(K, V)> for Tree<K, V> {
-    fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
+    fn extend<IntoIter: IntoIterator<Item = (K, V)>>(&mut self, iter: IntoIter) {
         for (key, value) in iter {
             self.insert(key, value);
         }
@@ -361,8 +371,22 @@ impl<K: Ord, V> Extend<(K, V)> for Tree<K, V> {
 }
 
 impl<'a, K: Ord + Copy, V: Copy> Extend<(&'a K, &'a V)> for Tree<K, V> {
-    fn extend<T: IntoIterator<Item = (&'a K, &'a V)>>(&mut self, iter: T) {
+    fn extend<IntoIter: IntoIterator<Item = (&'a K, &'a V)>>(&mut self, iter: IntoIter) {
         self.extend(iter.into_iter().map(|(&key, &value)| (key, value)));
+    }
+}
+
+impl<K: Ord, V> FromIterator<(K, V)> for Tree<K, V> {
+    fn from_iter<IntoIter: IntoIterator<Item = (K, V)>>(iter: IntoIter) -> Self {
+        let mut tree = Self::new();
+        tree.extend(iter);
+        tree
+    }
+}
+
+impl<K: Ord, V, const N: usize> From<[(K, V); N]> for Tree<K, V> {
+    fn from(arr: [(K, V); N]) -> Self {
+        Self::from_iter(arr)
     }
 }
 
@@ -462,6 +486,18 @@ impl<'tree, K: 'tree, V: 'tree> Iterator for Inorder<K, V, &'tree ()> {
         }
         Some((&node.key, &node.value))
     }
+
+    fn last(mut self) -> Option<Self::Item> {
+        self.next_back()
+    }
+
+    fn min(mut self) -> Option<Self::Item> {
+        self.next()
+    }
+
+    fn max(mut self) -> Option<Self::Item> {
+        self.next_back()
+    }
 }
 
 impl<'tree, K: 'tree, V: 'tree> DoubleEndedIterator for Inorder<K, V, &'tree ()> {
@@ -508,6 +544,18 @@ impl<'tree, K: 'tree, V: 'tree> Iterator for Inorder<K, V, &'tree mut ()> {
         }
         Some((&node.key, &mut node.value))
     }
+
+    fn last(mut self) -> Option<Self::Item> {
+        self.next_back()
+    }
+
+    fn min(mut self) -> Option<Self::Item> {
+        self.next()
+    }
+
+    fn max(mut self) -> Option<Self::Item> {
+        self.next_back()
+    }
 }
 
 impl<'tree, K: 'tree, V: 'tree> DoubleEndedIterator for Inorder<K, V, &'tree mut ()> {
@@ -532,7 +580,7 @@ impl<'tree, K: 'tree, V: 'tree> DoubleEndedIterator for Inorder<K, V, &'tree mut
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Default, Clone, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
 pub struct Set<T>(Tree<T, ()>);
 
 impl<T> Set<T> {
@@ -540,8 +588,12 @@ impl<T> Set<T> {
         Self(Tree::new())
     }
 
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
-        self.0.into_iter().map(|(key, _)| key)
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     pub fn contains<Q: Ord>(&self, item: &Q) -> bool
@@ -551,12 +603,61 @@ impl<T> Set<T> {
         self.0.contains_key(item)
     }
 
-    pub fn min(&self) -> Option<&T> {
-        self.0.min().map(|(key, _)| key)
+    pub fn insert(&mut self, item: T) -> bool
+    where
+        T: Ord,
+    {
+        self.0.insert(item, ()).is_none()
     }
 
-    pub fn max(&self) -> Option<&T> {
-        self.0.max().map(|(key, _)| key)
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
+        self.0.into_iter().map(|(key, _)| key)
+    }
+
+    pub fn first(&self) -> Option<&T> {
+        self.0.first().map(|(key, _)| key)
+    }
+
+    pub fn last(&self) -> Option<&T> {
+        self.0.last().map(|(key, _)| key)
+    }
+}
+
+impl<T> Default for Set<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Ord> Extend<T> for Set<T> {
+    fn extend<IntoIter: IntoIterator<Item = T>>(&mut self, iter: IntoIter) {
+        for item in iter {
+            self.insert(item);
+        }
+    }
+}
+
+impl<'a, T: Ord + Copy> Extend<&'a T> for Set<T> {
+    fn extend<IntoIter: IntoIterator<Item = &'a T>>(&mut self, iter: IntoIter) {
+        self.extend(iter.into_iter().copied());
+    }
+}
+
+impl<T: Ord> FromIterator<T> for Set<T> {
+    fn from_iter<IntoIter: IntoIterator<Item = T>>(iter: IntoIter) -> Self {
+        let mut set = Self::new();
+        set.extend(iter);
+        set
+    }
+}
+
+impl<T: Ord, const N: usize> From<[T; N]> for Set<T> {
+    fn from(arr: [T; N]) -> Self {
+        Self::from_iter(arr)
     }
 }
 
