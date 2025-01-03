@@ -13,7 +13,8 @@ num-traits = "0.2.19"
 sort = []
 matmul = []
 max_subarray = []
-default = ["sort", "matmul", "max_subarray", "gnuplot"]
+redblack = []
+default = ["sort", "matmul", "max_subarray", "redblack", "gnuplot"]
 
 [[bin]]
 name = "plot"

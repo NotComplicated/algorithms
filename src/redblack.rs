@@ -328,10 +328,24 @@ impl<K, V> Tree<K, V> {
         })
     }
 
+    pub fn first_mut(&mut self) -> Option<(&K, &mut V)> {
+        leftmost(self.root).map(|mut node_ptr| {
+            let node = unsafe { node_ptr.as_mut() };
+            (&node.key, &mut node.value)
+        })
+    }
+
     pub fn last(&self) -> Option<(&K, &V)> {
         rightmost(self.root).map(|node_ptr| {
             let node = unsafe { node_ptr.as_ref() };
             (&node.key, &node.value)
+        })
+    }
+
+    pub fn last_mut(&mut self) -> Option<(&K, &mut V)> {
+        rightmost(self.root).map(|mut node_ptr| {
+            let node = unsafe { node_ptr.as_mut() };
+            (&node.key, &mut node.value)
         })
     }
 }
@@ -580,6 +594,8 @@ impl<'tree, K: 'tree, V: 'tree> DoubleEndedIterator for Inorder<K, V, &'tree mut
     }
 }
 
+pub type Map<K, V> = Tree<K, V>;
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
 pub struct Set<T>(Tree<T, ()>);
 
@@ -596,7 +612,7 @@ impl<T> Set<T> {
         self.0.is_empty()
     }
 
-    pub fn contains<Q: Ord>(&self, item: &Q) -> bool
+    pub fn contains<Q: ?Sized + Ord>(&self, item: &Q) -> bool
     where
         T: Borrow<Q> + Ord,
     {
@@ -664,5 +680,306 @@ impl<T: Ord, const N: usize> From<[T; N]> for Set<T> {
 impl<T: fmt::Debug> fmt::Debug for Set<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_set().entries(self.iter()).finish()
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+
+    #[test]
+    fn empty() {
+        let trees = [Tree::<(), ()>::new(), Default::default()];
+        for tree in trees {
+            assert_eq!(tree.len(), 0);
+            assert!(tree.is_empty());
+            assert!(tree.get(&()).is_none());
+        }
+    }
+
+    #[test]
+    fn insert() {
+        let mut tree = Tree::new();
+        assert_eq!(tree.insert(1, 1), None);
+        assert_eq!(tree.insert(2, 2), None);
+        assert_eq!(tree.insert(1, 3), Some(1));
+        assert_eq!(tree.len(), 2);
+        assert!(!tree.is_empty());
+        let mut tree = Tree::new();
+        assert_eq!(tree.insert("foo", 1), None);
+        assert_eq!(tree.insert("bar", 2), None);
+        assert_eq!(tree.insert("foo", 3), Some(1));
+        assert_eq!(tree.len(), 2);
+        assert!(!tree.is_empty());
+        let mut tree = Tree::new();
+        assert_eq!(tree.insert("foo".to_string(), 1), None);
+        assert_eq!(tree.insert("bar".into(), 2), None);
+        assert_eq!(tree.insert("foo".into(), 3), Some(1));
+        assert_eq!(tree.len(), 2);
+        assert!(!tree.is_empty());
+    }
+
+    #[test]
+    fn get() {
+        let mut tree = Tree::new();
+        tree.insert(1, 1);
+        tree.insert(2, 2);
+        assert_eq!(tree.get(&1), Some(&1));
+        assert_eq!(tree.get(&2), Some(&2));
+        assert_eq!(tree.get(&3), None);
+        let mut tree = Tree::new();
+        tree.insert("foo", 1);
+        tree.insert("bar", 2);
+        assert_eq!(tree.get("foo"), Some(&1));
+        assert_eq!(tree.get("bar"), Some(&2));
+        assert_eq!(tree.get("baz"), None);
+        let mut tree = Tree::new();
+        tree.insert("foo".to_string(), 1);
+        tree.insert("bar".into(), 2);
+        assert_eq!(tree.get("foo"), Some(&1));
+        assert_eq!(tree.get("bar"), Some(&2));
+        assert_eq!(tree.get("baz"), None);
+        let mut tree = Tree::new();
+        tree.insert("foo".to_string(), vec![1, 2]);
+        tree.insert("bar".into(), vec![3]);
+        assert_eq!(tree.get("foo").map(|v| &**v), Some::<&[_]>(&[1, 2]));
+        assert_eq!(tree.get("bar").map(|v| &**v), Some::<&[_]>(&[3]));
+        assert_eq!(tree.get("baz"), None);
+    }
+
+    #[test]
+    fn get_mut() {
+        let mut tree = Tree::new();
+        tree.insert("b".to_string(), "b".to_string());
+        tree.get_mut("b").unwrap().push_str("az");
+        assert_eq!(tree.get("b").map(|s| &**s), Some("baz"));
+        tree.insert("a".to_string(), "a".to_string());
+        tree.insert("c".to_string(), "c".to_string());
+        tree.get_mut("c").unwrap().push_str("ar");
+        assert_eq!(tree.get("c").map(|s| &**s), Some("car"));
+        assert_eq!(format!("{tree:?}"), r#"{"a": "a", "b": "baz", "c": "car"}"#);
+    }
+
+    #[test]
+    fn from_iter() {
+        let tree = [("a", 1), ("b", 2), ("c", 3)]
+            .into_iter()
+            .collect::<Tree<_, _>>();
+        assert_eq!(tree.len(), 3);
+        assert_eq!(format!("{tree:?}"), r#"{"a": 1, "b": 2, "c": 3}"#);
+    }
+
+    #[test]
+    fn extend() {
+        let mut tree = Tree::new();
+        tree.extend([("a", 1), ("c", 3)].iter().copied());
+        assert_eq!(tree.len(), 2);
+        assert_eq!(format!("{tree:?}"), r#"{"a": 1, "c": 3}"#);
+        tree.extend([("d", 4), ("b", 2), ("e", 5)].iter().copied());
+        assert_eq!(tree.len(), 5);
+        assert_eq!(
+            format!("{tree:?}"),
+            r#"{"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}"#
+        );
+    }
+
+    #[test]
+    fn clone() {
+        let tree1 = [(2, 2), (3, 3), (1, 1)]
+            .iter()
+            .copied()
+            .collect::<Tree<_, _>>();
+        let tree2 = tree1.clone();
+        assert_eq!(tree1, tree2);
+        assert_ne!(tree1.root, tree2.root);
+    }
+
+    #[test]
+    fn clear() {
+        let mut tree = Tree::new();
+        tree.insert(1, 1);
+        tree.insert(2, 2);
+        tree.clear();
+        assert_eq!(tree.len(), 0);
+        assert!(tree.is_empty());
+        assert!(tree.get(&1).is_none());
+        assert!(tree.get(&2).is_none());
+    }
+
+    #[test]
+    fn iter() {
+        let mut tree = [(1, 1), (3, 3), (2, 2)]
+            .iter()
+            .copied()
+            .collect::<Tree<_, _>>();
+        assert_eq!(
+            tree.iter().collect::<Vec<_>>(),
+            vec![(&1, &1), (&2, &2), (&3, &3)]
+        );
+        assert_eq!(tree.keys().collect::<Vec<_>>(), vec![&1, &2, &3]);
+        assert_eq!(tree.values().collect::<Vec<_>>(), vec![&1, &2, &3]);
+        assert_eq!(tree.values_mut().collect::<Vec<_>>(), vec![&1, &2, &3]);
+        let mut values = tree.values_mut();
+        *values.next().unwrap() += 1;
+        *values.next_back().unwrap() += 1;
+        drop(values);
+        assert_eq!(format!("{tree:?}"), r#"{1: 2, 2: 2, 3: 4}"#);
+    }
+
+    #[test]
+    fn first_last() {
+        let mut tree = Tree::new();
+        assert_eq!(tree.first(), None);
+        assert_eq!(tree.last(), None);
+        tree.insert(1, 1);
+        assert_eq!(tree.first(), Some((&1, &1)));
+        assert_eq!(tree.last(), Some((&1, &1)));
+        tree.insert(2, 2);
+        assert_eq!(tree.first(), Some((&1, &1)));
+        assert_eq!(tree.last(), Some((&2, &2)));
+        tree.insert(3, 3);
+        assert_eq!(tree.first(), Some((&1, &1)));
+        assert_eq!(tree.last(), Some((&3, &3)));
+        *tree.first_mut().unwrap().1 += 1;
+        *tree.last_mut().unwrap().1 *= 2;
+        assert_eq!(format!("{tree:?}"), r#"{1: 2, 2: 2, 3: 6}"#);
+    }
+
+    #[test]
+    fn eq() {
+        let tree1 = [(1, 1), (2, 2), (3, 3)]
+            .iter()
+            .copied()
+            .collect::<Tree<_, _>>();
+        let tree2 = [(2, 2), (1, 1), (3, 3)]
+            .iter()
+            .copied()
+            .collect::<Tree<_, _>>();
+        let tree3 = [(1, 1), (2, 2), (4, 4)]
+            .iter()
+            .copied()
+            .collect::<Tree<_, _>>();
+        assert_eq!(tree1, tree2);
+        assert_ne!(tree1, tree3);
+    }
+
+    #[test]
+    fn ord() {
+        let tree1 = [('d', ()), ('b', ()), ('c', ())]
+            .iter()
+            .copied()
+            .collect::<Tree<_, _>>();
+        let tree2 = [('a', ()), ('b', ()), ('e', ())]
+            .iter()
+            .copied()
+            .collect::<Tree<_, _>>();
+        let tree3 = [('a', ()), ('a', ()), ('a', ())]
+            .iter()
+            .copied()
+            .collect::<Tree<_, _>>();
+        assert!(tree1 > tree3);
+        assert!(tree3 < tree1);
+        assert!(tree1 > tree2);
+        assert!(tree2 < tree1);
+        assert!(tree2 > tree3);
+        assert!(tree3 < tree2);
+        let mut trees = [tree1.clone(), tree2.clone(), tree3.clone()];
+        trees.sort();
+        assert_eq!(trees, [tree3, tree2, tree1]);
+    }
+
+    #[test]
+    fn index() {
+        let tree = [(1, 1), (2, 2), (3, 3)]
+            .iter()
+            .copied()
+            .collect::<Tree<_, _>>();
+        assert_eq!(tree[&1], 1);
+        assert_eq!(tree[&2], 2);
+        assert_eq!(tree[&3], 3);
+    }
+
+    #[test]
+    #[should_panic]
+    fn index_panic() {
+        let tree = Tree::<i32, ()>::new();
+        let _ = tree[&1];
+    }
+
+    #[test]
+    fn hash() {
+        use std::collections::hash_map::DefaultHasher;
+
+        let tree1 = [(1, 1), (2, 2), (3, 3)]
+            .iter()
+            .copied()
+            .collect::<Tree<_, _>>();
+        let tree2 = [(2, 2), (1, 1), (3, 3)]
+            .iter()
+            .copied()
+            .collect::<Tree<_, _>>();
+        let tree3 = [(1, 1), (2, 2), (4, 4)]
+            .iter()
+            .copied()
+            .collect::<Tree<_, _>>();
+        let mut hasher = DefaultHasher::new();
+        tree1.hash(&mut hasher);
+        let hash1 = hasher.finish();
+        let mut hasher = DefaultHasher::new();
+        tree2.hash(&mut hasher);
+        let hash2 = hasher.finish();
+        let mut hasher = DefaultHasher::new();
+        tree3.hash(&mut hasher);
+        let hash3 = hasher.finish();
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, hash3);
+    }
+}
+
+#[cfg(test)]
+mod set_tests {
+    use super::*;
+
+    #[test]
+    fn empty() {
+        let sets = [Set::<()>::new(), Default::default()];
+        for set in sets {
+            assert_eq!(set.len(), 0);
+            assert!(set.is_empty());
+            assert!(!set.contains(&()));
+        }
+    }
+
+    #[test]
+    fn insert() {
+        let mut set = Set::new();
+        assert!(set.insert(1));
+        assert!(set.insert(2));
+        assert!(!set.insert(1));
+        assert_eq!(set.len(), 2);
+        assert!(!set.is_empty());
+        let mut set = Set::new();
+        assert!(set.insert("foo"));
+        assert!(set.insert("bar"));
+        assert!(!set.insert("foo"));
+        assert_eq!(set.len(), 2);
+        assert!(!set.is_empty());
+        let mut set = Set::new();
+        assert!(set.insert("foo".to_string()));
+        assert!(set.insert("bar".into()));
+        assert!(!set.insert("foo".into()));
+        assert_eq!(set.len(), 2);
+        assert!(!set.is_empty());
+        assert_eq!(format!("{set:?}"), r#"{"bar", "foo"}"#);
+    }
+
+    #[test]
+    fn contains() {
+        let mut set = Set::new();
+        set.insert("foo".to_string());
+        set.insert("bar".into());
+        assert!(set.contains("foo"));
+        assert!(set.contains("bar"));
+        assert!(!set.contains("baz"));
     }
 }
