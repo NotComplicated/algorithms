@@ -3,10 +3,10 @@ use std::{
     cmp::Ordering,
     fmt,
     hash::{Hash, Hasher},
-    iter::FusedIterator,
+    iter::{self, FusedIterator, Peekable},
     marker::PhantomData,
     mem,
-    ops::Index,
+    ops::{BitAnd, BitOr, Index},
     ptr::NonNull,
 };
 
@@ -631,7 +631,7 @@ impl<T> Set<T> {
     }
 
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
-        self.0.into_iter().map(|(key, _)| key)
+        self.into_iter()
     }
 
     pub fn first(&self) -> Option<&T> {
@@ -640,6 +640,21 @@ impl<T> Set<T> {
 
     pub fn last(&self) -> Option<&T> {
         self.0.last().map(|(key, _)| key)
+    }
+
+    pub fn union<'a>(&'a self, other: &'a Self) -> Union<'a, T> {
+        Union {
+            prev: None,
+            left: self.into_iter().peekable(),
+            right: other.into_iter().peekable(),
+        }
+    }
+
+    pub fn intersection<'a>(&'a self, other: &'a Self) -> Intersection<'a, T> {
+        Intersection {
+            left: self.into_iter().peekable(),
+            right: other.into_iter().peekable(),
+        }
     }
 }
 
@@ -680,6 +695,80 @@ impl<T: Ord, const N: usize> From<[T; N]> for Set<T> {
 impl<T: fmt::Debug> fmt::Debug for Set<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_set().entries(self.iter()).finish()
+    }
+}
+
+impl<'set, T> IntoIterator for &'set Set<T> {
+    type Item = &'set T;
+    type IntoIter = iter::Map<Inorder<T, (), &'set ()>, fn((&'set T, &'set ())) -> &'set T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Inorder::new(self.0.root).map(|(key, _)| key)
+    }
+}
+
+pub struct Union<'a, T> {
+    prev: Option<&'a T>,
+    left: Peekable<<&'a Set<T> as IntoIterator>::IntoIter>,
+    right: Peekable<<&'a Set<T> as IntoIterator>::IntoIter>,
+}
+
+impl<'a, T: Ord> Iterator for Union<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let next = match (self.left.peek(), self.right.peek()) {
+                (Some(l), Some(r)) if l <= r => self.left.next(),
+                (Some(_), Some(_)) => self.right.next(),
+                (Some(_), None) => self.left.next(),
+                (None, Some(_)) => self.right.next(),
+                (None, None) => None,
+            };
+            if next != self.prev {
+                self.prev = next;
+                break next;
+            }
+        }
+    }
+}
+
+impl<'a, T: Ord> FusedIterator for Union<'a, T> {}
+
+pub struct Intersection<'a, T> {
+    left: Peekable<<&'a Set<T> as IntoIterator>::IntoIter>,
+    right: Peekable<<&'a Set<T> as IntoIterator>::IntoIter>,
+}
+
+impl<'a, T: Ord> Iterator for Intersection<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.left.peek()?.cmp(self.right.peek()?) {
+                Ordering::Less => self.left.next(),
+                Ordering::Greater => self.right.next(),
+                Ordering::Equal => break self.left.next(),
+            };
+        }
+    }
+}
+
+impl<'a, T: Ord> FusedIterator for Intersection<'a, T> {}
+
+impl<T: Clone + Ord> BitOr for &Set<T> {
+    type Output = Set<T>;
+
+    fn bitor(self, other: Self) -> Self::Output {
+        self.union(other).cloned().collect()
+    }
+}
+
+impl<T: Clone + Ord> BitAnd for &Set<T> {
+    type Output = Set<T>;
+
+    fn bitand(self, other: Self) -> Self::Output {
+        self.intersection(other).cloned().collect()
     }
 }
 
@@ -981,5 +1070,30 @@ mod set_tests {
         assert!(set.contains("foo"));
         assert!(set.contains("bar"));
         assert!(!set.contains("baz"));
+    }
+
+    #[test]
+    fn from_iter() {
+        let set = ["b", "a", "a", "c"].iter().collect::<Set<_>>();
+        assert_eq!(set.len(), 3);
+        assert_eq!(format!("{set:?}"), r#"{"a", "b", "c"}"#);
+    }
+
+    #[test]
+    fn union() {
+        let set1 = ['a', 'b', 'c'].into_iter().collect::<Set<_>>();
+        let set2 = ['b', 'c', 'd'].into_iter().collect::<Set<_>>();
+        assert!(set1.union(&set2).copied().eq(['a', 'b', 'c', 'd']));
+        let union = &set1 | &set2;
+        assert_eq!(format!("{union:?}"), r#"{'a', 'b', 'c', 'd'}"#);
+    }
+
+    #[test]
+    fn intersection() {
+        let set1 = ['a', 'b', 'c'].into_iter().collect::<Set<_>>();
+        let set2 = ['b', 'c', 'd'].into_iter().collect::<Set<_>>();
+        assert!(set1.intersection(&set2).copied().eq(['b', 'c']));
+        let intersection = &set1 & &set2;
+        assert_eq!(format!("{intersection:?}"), r#"{'b', 'c'}"#);
     }
 }
