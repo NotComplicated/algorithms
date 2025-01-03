@@ -619,6 +619,20 @@ impl<T> Set<T> {
         self.0.contains_key(item)
     }
 
+    pub fn is_subset(&self, other: &Self) -> bool
+    where
+        T: Ord,
+    {
+        self.iter().all(|item| other.contains(item))
+    }
+
+    pub fn is_superset(&self, other: &Self) -> bool
+    where
+        T: Ord,
+    {
+        other.is_subset(self)
+    }
+
     pub fn insert(&mut self, item: T) -> bool
     where
         T: Ord,
@@ -655,6 +669,13 @@ impl<T> Set<T> {
             left: self.into_iter().peekable(),
             right: other.into_iter().peekable(),
         }
+    }
+
+    pub fn is_disjoint(&self, other: &Self) -> bool
+    where
+        T: Ord,
+    {
+        self.union(other).next().is_none()
     }
 }
 
